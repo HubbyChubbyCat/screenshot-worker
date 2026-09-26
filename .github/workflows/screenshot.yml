@@ -27,6 +27,8 @@ jobs:
           KEYWORD: ${{ github.event.client_payload.keyword }}
           ASPECT_RATIO: ${{ github.event.client_payload.aspectRatio }}
           ZOOM_LEVEL: ${{ github.event.client_payload.zoomLevel }}
+          GATE_G2: ${{ github.event.client_payload.gateG2 }}
+          GATE_G3: ${{ github.event.client_payload.gateG3 }}
           JOB_ID: ${{ github.event.client_payload.jobId }}
           ARTICLE_ID: ${{ github.event.client_payload.articleId }}
           ARTICLE_TITLE: ${{ github.event.client_payload.articleTitle }}
