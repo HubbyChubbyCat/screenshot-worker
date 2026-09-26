@@ -1,11 +1,12 @@
-name: Take Authentic Screenshot
+name: Capture Article Frames
 on:
   repository_dispatch:
     types: [take-screenshot]
 
 jobs:
-  screenshot:
+  capture:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -17,50 +18,18 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          npm init -y
-          npm install playwright-extra puppeteer-extra-plugin-stealth axios
+          npm install
           npx playwright install chromium --with-deps
 
-      - name: Execute Stealth Screenshot
+      - name: Execute Capture Pipeline
         env:
           TARGET_URL: ${{ github.event.client_payload.url }}
+          KEYWORD: ${{ github.event.client_payload.keyword }}
+          ASPECT_RATIO: ${{ github.event.client_payload.aspectRatio }}
+          JOB_ID: ${{ github.event.client_payload.jobId }}
+          ARTICLE_ID: ${{ github.event.client_payload.articleId }}
+          ARTICLE_TITLE: ${{ github.event.client_payload.articleTitle }}
+          WIKIPEDIA_SECTION: ${{ github.event.client_payload.wikipediaSection }}
           CALLBACK_URL: ${{ secrets.CALLBACK_URL }}
         run: |
-          node -e "
-          const { chromium } = require('playwright-extra');
-          const stealth = require('puppeteer-extra-plugin-stealth')();
-          const axios = require('axios');
-          chromium.use(stealth);
-          
-          (async () => {
-            try {
-              const browser = await chromium.launch({ headless: true });
-              const context = await browser.newContext({
-                viewport: { width: 1280, height: 900 },
-                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
-              });
-              const page = await context.newPage();
-              
-              await page.goto(process.env.TARGET_URL, { waitUntil: 'networkidle', timeout: 45000 });
-              
-              try {
-                await page.evaluate(() => {
-                  const frame = document.querySelector('.skiptranslate') || document.getElementById('gt-appbar');
-                  if (frame) frame.style.display = 'none';
-                  document.body.style.top = '0px';
-                });
-              } catch(e){}
-
-              const buffer = await page.screenshot({ fullPage: true, type: 'jpeg', quality: 80 });
-              
-              await axios.post(process.env.CALLBACK_URL, {
-                success: true,
-                url: process.env.TARGET_URL,
-                image: buffer.toString('base64')
-              });
-              await browser.close();
-            } catch (err) {
-              await axios.post(process.env.CALLBACK_URL, { success: false, url: process.env.TARGET_URL, error: err.message });
-            }
-          })();
-          "
+          npx tsx scripts/capture-worker.ts
