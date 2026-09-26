@@ -33,8 +33,8 @@ jobs:
             const query = process.env.QUERY;
             const count = parseInt(process.env.COUNT || '20');
             const searchId = process.env.SEARCH_ID;
-            const callbackBase = process.env.CALLBACK_URL.replace(/\\/$/, '');
-            const callbackUrl = callbackBase + '/api/face-match/search-callback';
+            const callbackBase = process.env.CALLBACK_URL.replace(/\/$/, '');
+            const callbackUrl = callbackBase + '/face-match-embed/api/face-match/search-callback';
             
             try {
               const browser = await chromium.launch({ headless: true });
