@@ -1,1 +1,68 @@
+name: Take Authentic Screenshot
+on:
+  repository_dispatch:
+    types: [take-screenshot]
 
+jobs:
+  screenshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Dependencies
+        run: |
+          npm init -y
+          npm install playwright-extra puppeteer-extra-plugin-stealth axios
+          npx playwright install chromium --with-deps
+
+      - name: Execute Stealth Screenshot
+        env:
+          TARGET_URL: ${{ github.event.client_payload.url }}
+          CALLBACK_URL: ${{ secrets.CALLBACK_URL }}
+        run: |
+          node -e "
+          const { chromium } = require('playwright-extra');
+          const stealth = require('puppeteer-extra-plugin-stealth')();
+          const axios = require('axios');
+          chromium.use(stealth);
+          
+          (async () => {
+            try {
+              const browser = await chromium.launch({ headless: true });
+              const context = await browser.newContext({
+                viewport: { width: 1280, height: 900 },
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+              });
+              const page = await context.newPage();
+              
+              // Load page via network-idle state
+              await page.goto(process.env.TARGET_URL, { waitUntil: 'networkidle', timeout: 45000 });
+              
+              // Hide Google Translate navigation top-bar frame if proxy wrapper was used
+              try {
+                await page.evaluate(() => {
+                  const frame = document.querySelector('.skiptranslate') || document.getElementById('gt-appbar');
+                  if (frame) frame.style.display = 'none';
+                  document.body.style.top = '0px';
+                });
+              } catch(e){}
+
+              const buffer = await page.screenshot({ fullPage: true, type: 'jpeg', quality: 80 });
+              
+              await axios.post(process.env.CALLBACK_URL, {
+                success: true,
+                url: process.env.TARGET_URL,
+                image: buffer.toString('base64')
+              });
+              await browser.close();
+            } catch (err) {
+              await axios.post(process.env.CALLBACK_URL, { success: false, url: process.env.TARGET_URL, error: err.message });
+            }
+          })();
+          "
