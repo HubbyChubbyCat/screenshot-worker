@@ -1,0 +1,114 @@
+name: Bing Image Search
+on:
+  repository_dispatch:
+    types: [bing-image-search]
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Playwright
+        run: npx playwright install chromium --with-deps
+
+      - name: Scrape Bing Images
+        env:
+          QUERY: ${{ github.event.client_payload.query }}
+          COUNT: ${{ github.event.client_payload.count }}
+          SEARCH_ID: ${{ github.event.client_payload.searchId }}
+          CALLBACK_URL: ${{ secrets.CALLBACK_URL }}
+        run: |
+          node -e "
+          const { chromium } = require('playwright');
+          
+          (async () => {
+            const query = process.env.QUERY;
+            const count = parseInt(process.env.COUNT || '20');
+            const searchId = process.env.SEARCH_ID;
+            const callbackBase = process.env.CALLBACK_URL.replace(/\\/$/, '');
+            const callbackUrl = callbackBase + '/api/face-match/search-callback';
+            
+            try {
+              const browser = await chromium.launch({ headless: true });
+              const context = await browser.newContext({
+                viewport: { width: 1920, height: 1080 },
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+              });
+              const page = await context.newPage();
+              
+              // Navigate to Bing Images
+              const searchUrl = 'https://www.bing.com/images/search?q=' + encodeURIComponent(query) + '&form=HDRSC2&first=1';
+              console.log('Navigating to:', searchUrl);
+              await page.goto(searchUrl, { waitUntil: 'networkidle', timeout: 30000 });
+              
+              // Wait for image results to load
+              await page.waitForSelector('.iusc', { timeout: 10000 });
+              
+              // Scroll down to load more images
+              for (let i = 0; i < 3; i++) {
+                await page.evaluate(() => window.scrollBy(0, 1000));
+                await page.waitForTimeout(1000);
+              }
+              
+              // Extract image URLs from the page
+              const images = await page.evaluate((maxCount) => {
+                const results = [];
+                const elements = document.querySelectorAll('.iusc');
+                for (const el of elements) {
+                  if (results.length >= maxCount) break;
+                  try {
+                    const m = el.getAttribute('m');
+                    if (m) {
+                      const data = JSON.parse(m);
+                      const murl = data.murl; // original image URL
+                      const turl = data.turl; // thumbnail URL
+                      const t = data.t; // title
+                      if (murl && murl.startsWith('http')) {
+                        results.push({
+                          src: murl,
+                          thumb: turl || murl,
+                          title: t || ''
+                        });
+                      }
+                    }
+                  } catch (e) {}
+                }
+                return results;
+              }, count);
+              
+              console.log('Found ' + images.length + ' images for query: ' + query);
+              
+              await browser.close();
+              
+              // Send results back to server
+              await fetch(callbackUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  searchId: searchId,
+                  success: true,
+                  query: query,
+                  images: images
+                })
+              });
+              console.log('Callback sent with ' + images.length + ' images');
+              
+            } catch (err) {
+              console.error('Search failed:', err.message);
+              await fetch(callbackUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  searchId: searchId,
+                  success: false,
+                  error: err.message
+                })
+              }).catch(() => {});
+            }
+          })();
+          "
