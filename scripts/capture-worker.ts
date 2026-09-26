@@ -54,8 +54,10 @@ async function main() {
   const keyword = process.env.KEYWORD;
   const aspectRatio = process.env.ASPECT_RATIO || "16:9";
   const zoomLevel = process.env.ZOOM_LEVEL || "auto";
-  const gateG2 = process.env.GATE_G2 !== "false";
-  const gateG3 = process.env.GATE_G3 !== "false";
+  // Parse gates string: "g1:true,g2:true,g3:true"
+  const gatesRaw = process.env.GATES || "g1:true,g2:true,g3:true";
+  const gateG2 = gatesRaw.includes("g2:true");
+  const gateG3 = gatesRaw.includes("g3:true");
   const jobId = process.env.JOB_ID;
   const articleId = process.env.ARTICLE_ID;
   // The CALLBACK_URL secret is the BASE server URL (e.g., https://preview-xxx.space-z.ai)
