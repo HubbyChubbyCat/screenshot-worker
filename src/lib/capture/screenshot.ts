@@ -351,6 +351,72 @@ export async function highlightOccurrence(
     mark.appendChild(fragment);
     range.insertNode(mark);
 
+    // 5b. MULTI-LINE SPLIT (added 2026-09-26):
+    //     If the <mark> spans multiple CSS line boxes (keyword wraps across
+    //     lines, e.g., "Donald" at end of line 1, "Trump" at start of line 2),
+    //     the highlight becomes a tall vertical rectangle — looks broken.
+    //     Fix: split the <mark> into individual word-level marks, one per line.
+    //     Each word gets its own horizontal highlight instead of one tall box.
+    const clientRects = mark.getClientRects();
+    if (clientRects.length > 1) {
+      // The keyword spans multiple lines — split into word-level marks
+      const text = mark.textContent || '';
+      const words = text.split(/(\\s+)/); // keep whitespace as separators
+      if (words.length > 1) {
+        // Remove the single mark and replace with per-word marks
+        const parent = mark.parentNode;
+        if (parent) {
+          parent.removeChild(mark);
+          const allMarks = [];
+          for (const word of words) {
+            if (!word || word.trim().length === 0) {
+              // Whitespace — insert as text node
+              parent.insertBefore(document.createTextNode(word), mark);
+              continue;
+            }
+            const wordMark = document.createElement('mark');
+            wordMark.setAttribute('data-nmc-highlight', 'true');
+            // Apply the same bulletproof CSS
+            wordMark.style.setProperty('background-color', '#FFFF00', 'important');
+            wordMark.style.setProperty('background-image', 'none', 'important');
+            wordMark.style.setProperty('background', '#FFFF00', 'important');
+            wordMark.style.setProperty('color', '#000000', 'important');
+            wordMark.style.setProperty('-webkit-text-fill-color', '#000000', 'important');
+            wordMark.style.setProperty('box-shadow', '0 0 0 3px #FFFF00, 0 0 0 6px #FFFF00', 'important');
+            wordMark.style.setProperty('outline', '2px solid #FFFF00', 'important');
+            wordMark.style.setProperty('padding', '1px 2px', 'important');
+            wordMark.style.setProperty('margin', '0', 'important');
+            wordMark.style.setProperty('display', 'inline', 'important');
+            wordMark.style.setProperty('visibility', 'visible', 'important');
+            wordMark.style.setProperty('opacity', '1', 'important');
+            wordMark.textContent = word;
+            parent.insertBefore(wordMark, mark);
+            allMarks.push(wordMark);
+          }
+          parent.removeChild(mark);
+
+          // Return the bounding rect of ALL marks combined
+          // (for centering/zoom math — use the first mark's position since
+          // that's the most visible one in the screenshot)
+          if (allMarks.length > 0) {
+            const firstRect = allMarks[0].getBoundingClientRect();
+            console.log('[highlightOccurrence] Multi-line keyword split into ' + allMarks.length + ' word-level marks');
+            return {
+              success: true,
+              rect: {
+                x: firstRect.x,
+                y: firstRect.y,
+                width: firstRect.width,
+                height: firstRect.height,
+                docX: firstRect.x + window.scrollX,
+                docY: firstRect.y + window.scrollY,
+              },
+            };
+          }
+        }
+      }
+    }
+
     const r = mark.getBoundingClientRect();
     return {
       success: true,
@@ -1488,6 +1554,44 @@ export async function captureCenteredScreenshot(
                     const fragment = range.extractContents();
                     mark.appendChild(fragment);
                     range.insertNode(mark);
+                    // Multi-line split: if mark spans multiple lines, split into word marks
+                    const cr = mark.getClientRects();
+                    if (cr.length > 1) {
+                      const text = mark.textContent || '';
+                      const words = text.split(/(\\s+)/);
+                      if (words.length > 1) {
+                        const p = mark.parentNode;
+                        if (p) {
+                          p.removeChild(mark);
+                          const ms = [];
+                          for (const word of words) {
+                            if (!word || word.trim().length === 0) { p.insertBefore(document.createTextNode(word), mark); continue; }
+                            const wm = document.createElement('mark');
+                            wm.setAttribute('data-nmc-highlight', 'true');
+                            wm.style.setProperty('background-color', '#FFFF00', 'important');
+                            wm.style.setProperty('background-image', 'none', 'important');
+                            wm.style.setProperty('background', '#FFFF00', 'important');
+                            wm.style.setProperty('color', '#000000', 'important');
+                            wm.style.setProperty('-webkit-text-fill-color', '#000000', 'important');
+                            wm.style.setProperty('box-shadow', '0 0 0 3px #FFFF00, 0 0 0 6px #FFFF00', 'important');
+                            wm.style.setProperty('outline', '2px solid #FFFF00', 'important');
+                            wm.style.setProperty('padding', '1px 2px', 'important');
+                            wm.style.setProperty('margin', '0', 'important');
+                            wm.style.setProperty('display', 'inline', 'important');
+                            wm.style.setProperty('visibility', 'visible', 'important');
+                            wm.style.setProperty('opacity', '1', 'important');
+                            wm.textContent = word;
+                            p.insertBefore(wm, mark);
+                            ms.push(wm);
+                          }
+                          p.removeChild(mark);
+                          if (ms.length > 0) {
+                            const fr = ms[0].getBoundingClientRect();
+                            return { success: true, rect: { x: fr.x, y: fr.y, width: fr.width, height: fr.height, docX: fr.x + window.scrollX, docY: fr.y + window.scrollY } };
+                          }
+                        }
+                      }
+                    }
                     const r = mark.getBoundingClientRect();
                     return {
                       success: true,
@@ -1544,26 +1648,15 @@ export async function captureCenteredScreenshot(
     //      candidate. Self-healing preserved: if all candidates are
     //      multi-line, the frame slot stays empty for Pass 2/3 backfill
     //      from other articles.
-    // GATE 2: Frame selection checks (multi-line + tall-highlight).
-    // Skip entirely when gateG2 is false.
+    // GATE 2: Frame selection checks.
+    // NOTE: Multi-line keyword check REMOVED — the highlight function now
+    // SPLITS multi-line keywords into word-level marks (step 5b above), so
+    // each mark is always a single line. No need to reject multi-line
+    // keywords anymore — they produce clean per-word highlights.
     if (gateG2) {
-      const lineBoxCount = (await page.evaluate(`(() => {
-        const mark = document.querySelector('mark[data-nmc-highlight="true"]');
-        if (!mark) return -1;
-        return mark.getClientRects().length;
-      })()`)
-        .catch(() => 1)) as number;
-
-      if (lineBoxCount > 1) {
-        await removeHighlight(page).catch(() => {});
-        await removeVirtualPadding(page).catch(() => {});
-        throw new Error(
-          `keyword_spans_multiple_lines: highlight occupies ${lineBoxCount} line boxes ` +
-          `(multi-word keyword wraps across lines — split two-box highlight would look broken)`
-        );
-      }
-
-      // 2.5b. Tall-highlight check
+      // 2.5b. Tall-highlight check — only rejects abnormally tall containers
+      // (sidebar links wrapping images, flex/grid items). Normal text marks
+      // are never >80px tall.
       const tallBoxInfo = (await page.evaluate(`(() => {
         const mark = document.querySelector('mark[data-nmc-highlight="true"]');
         if (!mark) return { found: false, height: 0 };
