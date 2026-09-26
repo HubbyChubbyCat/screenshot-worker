@@ -23,7 +23,7 @@
 
 import { launchStealthBrowser, newStealthContext } from "../src/lib/capture/browser";
 import { renderArticle } from "../src/lib/capture/render";
-import { getAspectConfig } from "../src/lib/capture/aspect";
+import { getAspectConfig, getZoomConfig } from "../src/lib/capture/aspect";
 
 interface CapturedFramePayload {
   position: string;
@@ -53,6 +53,7 @@ async function main() {
   const targetUrl = process.env.TARGET_URL;
   const keyword = process.env.KEYWORD;
   const aspectRatio = process.env.ASPECT_RATIO || "16:9";
+  const zoomLevel = process.env.ZOOM_LEVEL || "auto";
   const jobId = process.env.JOB_ID;
   const articleId = process.env.ARTICLE_ID;
   // The CALLBACK_URL secret is the BASE server URL (e.g., https://preview-xxx.space-z.ai)
@@ -79,7 +80,8 @@ async function main() {
   console.log(`[capture-worker] Aspect: ${aspectRatio}`);
 
   const aspectCfg = getAspectConfig(aspectRatio);
-  console.log(`[capture-worker] Viewport: ${aspectCfg.width}x${aspectCfg.height}`);
+  const zoomCfg = getZoomConfig(zoomLevel);
+  console.log(`[capture-worker] Viewport: ${aspectCfg.width}x${aspectCfg.height} Zoom: ${zoomLevel}(${zoomCfg.minZoom}-${zoomCfg.maxZoom})`);
 
   const callbackPayload: CallbackPayload = {
     jobId,
@@ -110,8 +112,8 @@ async function main() {
       wikipediaSection,
       screenshotOpts: {
         targetWidthRatio: aspectCfg.targetWidthRatio,
-        minZoom: 1.0,
-        maxZoom: 4.0,
+        minZoom: zoomCfg.minZoom,
+        maxZoom: zoomCfg.maxZoom,
         frameWidth: aspectCfg.width,
         frameHeight: aspectCfg.height,
       },
