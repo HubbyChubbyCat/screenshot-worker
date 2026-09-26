@@ -77,6 +77,9 @@ export interface ScreenshotOptions {
   // Final output dimensions.
   frameWidth?: number;
   frameHeight?: number;
+  // Gate settings — when false, skip the corresponding check
+  gateG2?: boolean; // Frame selection checks (multi-line + tall-highlight)
+  gateG3?: boolean; // Pixel validation (blank frame + yellow detection)
 }
 
 export interface ScreenshotResult {
@@ -1354,6 +1357,8 @@ export async function captureCenteredScreenshot(
   const {
     frameWidth = 1920,
     frameHeight = 1080,
+    gateG2 = true,
+    gateG3 = true,
   } = opts;
 
   const viewportSize = page.viewportSize();
@@ -1398,43 +1403,42 @@ export async function captureCenteredScreenshot(
     //      candidate. Self-healing preserved: if all candidates are
     //      multi-line, the frame slot stays empty for Pass 2/3 backfill
     //      from other articles.
-    const lineBoxCount = (await page.evaluate(`(() => {
-      const mark = document.querySelector('mark[data-nmc-highlight="true"]');
-      if (!mark) return -1;
-      return mark.getClientRects().length;
-    })()`)
-      .catch(() => 1)) as number;
+    // GATE 2: Frame selection checks (multi-line + tall-highlight).
+    // Skip entirely when gateG2 is false.
+    if (gateG2) {
+      const lineBoxCount = (await page.evaluate(`(() => {
+        const mark = document.querySelector('mark[data-nmc-highlight="true"]');
+        if (!mark) return -1;
+        return mark.getClientRects().length;
+      })()`)
+        .catch(() => 1)) as number;
 
-    if (lineBoxCount > 1) {
-      await removeHighlight(page).catch(() => {});
-      await removeVirtualPadding(page).catch(() => {});
-      throw new Error(
-        `keyword_spans_multiple_lines: highlight occupies ${lineBoxCount} line boxes ` +
-        `(multi-word keyword wraps across lines — split two-box highlight would look broken)`
-      );
-    }
+      if (lineBoxCount > 1) {
+        await removeHighlight(page).catch(() => {});
+        await removeVirtualPadding(page).catch(() => {});
+        throw new Error(
+          `keyword_spans_multiple_lines: highlight occupies ${lineBoxCount} line boxes ` +
+          `(multi-word keyword wraps across lines — split two-box highlight would look broken)`
+        );
+      }
 
-    // 2.5b. Tall-highlight check (defense in depth — catches layout shifts
-    //       between discovery and capture, same rationale as lineBoxCount).
-    //       If the mark's bounding rect is >80px tall, the keyword sits in an
-    //       abnormal container (sidebar link wrapping an image, flex/grid item,
-    //       tall button). The highlight would be a vertically-stretched yellow
-    //       box — reject and let the next candidate try. Pure DOM check.
-    const tallBoxInfo = (await page.evaluate(`(() => {
-      const mark = document.querySelector('mark[data-nmc-highlight="true"]');
-      if (!mark) return { found: false, height: 0 };
-      const r = mark.getBoundingClientRect();
-      return { found: true, height: r.height };
-    })()`)
-      .catch(() => ({ found: false, height: 0 }))) as { found: boolean; height: number };
+      // 2.5b. Tall-highlight check
+      const tallBoxInfo = (await page.evaluate(`(() => {
+        const mark = document.querySelector('mark[data-nmc-highlight="true"]');
+        if (!mark) return { found: false, height: 0 };
+        const r = mark.getBoundingClientRect();
+        return { found: true, height: r.height };
+      })()`)
+        .catch(() => ({ found: false, height: 0 }))) as { found: boolean; height: number };
 
-    if (tallBoxInfo.found && tallBoxInfo.height > 80) {
-      await removeHighlight(page).catch(() => {});
-      await removeVirtualPadding(page).catch(() => {});
-      throw new Error(
-        `keyword_highlight_too_tall: mark height=${tallBoxInfo.height.toFixed(0)}px ` +
-        `(keyword sits in an abnormally tall container — vertically-stretched highlight would look broken)`
-      );
+      if (tallBoxInfo.found && tallBoxInfo.height > 80) {
+        await removeHighlight(page).catch(() => {});
+        await removeVirtualPadding(page).catch(() => {});
+        throw new Error(
+          `keyword_highlight_too_tall: mark height=${tallBoxInfo.height.toFixed(0)}px ` +
+          `(keyword sits in an abnormally tall container — vertically-stretched highlight would look broken)`
+        );
+      }
     }
 
     // kwRectAfterHighlight is the mark's bounding rect — used by all
