@@ -1168,7 +1168,22 @@ async function captureAndValidateOne(
       screenshotOpts
     );
 
-    // Gate 3: pixel-level validation
+    // Gate 3: pixel-level validation (skip when gateG3 is false)
+    const gateG3 = screenshotOpts?.gateG3 !== false;
+    if (!gateG3) {
+      // Gate 3 disabled — accept the frame without validation
+      console.log(`[render] ${logLabel}: GATE 3 DISABLED — accepting frame without validation`);
+      return {
+        positionType,
+        occurrenceIndex: occurrence.id,
+        imageBuffer: result.imageBuffer,
+        centerX: result.centerX,
+        centerY: result.centerY,
+        zoomFactor: result.zoomFactor,
+        wasClamped: result.wasClamped,
+      };
+    }
+
     const validation = await validateFrameImage(result.imageBuffer);
 
     if (validation.pass) {
