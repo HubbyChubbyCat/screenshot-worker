@@ -297,23 +297,12 @@ export async function renderArticle(
   url: string,
   opts: RenderOptions = {}
 ): Promise<RenderResult> {
-  const hint = opts.routeHint ?? "auto";
+  // ALL FALLBACKS REMOVED (2026-09-26):
+  // Only direct rendering of authentic news articles and blogs.
+  // No Google Cache, Wayback, Archive, Reader, OpenGraph, Reddit,
+  // Wikipedia, or Synthetic. If a URL doesn't load directly, it's skipped.
 
-  // Wikipedia fallback REMOVED (2026-09-26):
-  // The Wikipedia route rendered the same card for different articles,
-  // producing duplicate frames. It has been removed from the fallback
-  // ladder entirely. If an article URL is a Wikipedia page, it will be
-  // tried via 'direct' route (which loads the live Wikipedia page —
-  // different from the old card renderer, so no duplicates).
-
-  const ladder: CaptureRoute[] =
-    hint === "direct"
-      ? ["direct"]
-      : hint === "reader"
-      ? ["reader"]
-      : hint === "synthetic"
-      ? ["synthetic"]
-      : ["direct", "googlecache", "wayback", "archive", "reader", "opengraph", "reddit", "synthetic"];
+  const ladder: CaptureRoute[] = ["direct"];
 
   // The canonical publisher URL — refined after the direct attempt resolves
   // Google News redirects, so mirror routes target the REAL article.
