@@ -1,4 +1,5 @@
 name: Take Authentic Screenshot
+
 on:
   repository_dispatch:
     types: [take-screenshot]
@@ -6,6 +7,7 @@ on:
 jobs:
   screenshot:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -23,46 +25,75 @@ jobs:
 
       - name: Execute Stealth Screenshot
         env:
-          TARGET_URL: ${{ github.event.client_payload.url }}
+          TARGET_URL: https://www.notebookcheck.net/Claude-Opus-5-5-is-included-with-Pro-and-Free-still-misses-out.1406452.0.html
           CALLBACK_URL: ${{ secrets.CALLBACK_URL }}
         run: |
           node -e "
           const { chromium } = require('playwright-extra');
           const stealth = require('puppeteer-extra-plugin-stealth')();
           const axios = require('axios');
+
           chromium.use(stealth);
-          
+
           (async () => {
             try {
-              const browser = await chromium.launch({ headless: true });
+              const browser = await chromium.launch({
+                headless: true
+              });
+
               const context = await browser.newContext({
-                viewport: { width: 1280, height: 900 },
+                viewport: {
+                  width: 1280,
+                  height: 900
+                },
                 userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
               });
+
               const page = await context.newPage();
-              
-              // Load page via network-idle state
-              await page.goto(process.env.TARGET_URL, { waitUntil: 'networkidle', timeout: 45000 });
-              
+
+              // Load the target page
+              await page.goto(process.env.TARGET_URL, {
+                waitUntil: 'networkidle',
+                timeout: 45000
+              });
+
               // Hide Google Translate navigation top-bar frame if proxy wrapper was used
               try {
                 await page.evaluate(() => {
-                  const frame = document.querySelector('.skiptranslate') || document.getElementById('gt-appbar');
-                  if (frame) frame.style.display = 'none';
+                  const frame =
+                    document.querySelector('.skiptranslate') ||
+                    document.getElementById('gt-appbar');
+
+                  if (frame) {
+                    frame.style.display = 'none';
+                  }
+
                   document.body.style.top = '0px';
                 });
-              } catch(e){}
+              } catch (e) {}
 
-              const buffer = await page.screenshot({ fullPage: true, type: 'jpeg', quality: 80 });
-              
+              // Take full-page screenshot
+              const buffer = await page.screenshot({
+                fullPage: true,
+                type: 'jpeg',
+                quality: 80
+              });
+
+              // Send screenshot to callback
               await axios.post(process.env.CALLBACK_URL, {
                 success: true,
                 url: process.env.TARGET_URL,
                 image: buffer.toString('base64')
               });
+
               await browser.close();
+
             } catch (err) {
-              await axios.post(process.env.CALLBACK_URL, { success: false, url: process.env.TARGET_URL, error: err.message });
+              await axios.post(process.env.CALLBACK_URL, {
+                success: false,
+                url: process.env.TARGET_URL,
+                error: err.message
+              });
             }
           })();
           "
