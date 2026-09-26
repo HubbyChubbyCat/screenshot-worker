@@ -26,6 +26,7 @@ jobs:
           TARGET_URL: ${{ github.event.client_payload.url }}
           KEYWORD: ${{ github.event.client_payload.keyword }}
           ASPECT_RATIO: ${{ github.event.client_payload.aspectRatio }}
+          ZOOM_LEVEL: ${{ github.event.client_payload.zoomLevel }}
           JOB_ID: ${{ github.event.client_payload.jobId }}
           ARTICLE_ID: ${{ github.event.client_payload.articleId }}
           ARTICLE_TITLE: ${{ github.event.client_payload.articleTitle }}
