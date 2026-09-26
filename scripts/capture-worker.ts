@@ -143,7 +143,13 @@ async function main() {
       console.log(`[capture-worker] Captured ${callbackPayload.frames.length} frames`);
     } else {
       callbackPayload.success = false;
-      callbackPayload.skipReason = result.skipReason || "unknown_skip_reason";
+      // Always set a descriptive skip reason for debugging
+      if (result.outcome === "accepted" && (!result.capturedFrames || result.capturedFrames.length === 0)) {
+        // Article was accepted (keyword found) but 0 frames captured (Gate 3 rejected all)
+        callbackPayload.skipReason = "accepted_but_no_frames:gate3_rejected_all";
+      } else {
+        callbackPayload.skipReason = result.skipReason || `render_outcome:${result.outcome}`;
+      }
       callbackPayload.title = result.title ?? undefined;
       callbackPayload.routeUsed = result.routeUsed ?? undefined;
       callbackPayload.finalUrl = result.finalUrl ?? undefined;
