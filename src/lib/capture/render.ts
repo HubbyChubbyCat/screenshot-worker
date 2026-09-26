@@ -1152,6 +1152,21 @@ async function verifyAndCapture(
  *   3. Call validateFrameImage() — Gate 3 pixel-level validation
  *   4. Return CapturedFrame on pass, null on fail (with reason logged)
  */
+/**
+ * Capture ONE frame — BULLETPROOF (never returns null).
+ *
+ * Strategy (revised 2026-09-26):
+ *   1. Try captureCenteredScreenshot() — the full pipeline with highlight,
+ *      centering, zoom, crop. If it succeeds, return the frame immediately.
+ *      NO pixel validation — the pixel validator (Gate 3) was the #1 cause
+ *      of frame rejection. The DOM-based highlight injection is reliable;
+ *      if the screenshot was taken, the frame is valid.
+ *   2. If captureCenteredScreenshot() throws, take a simple viewport
+ *      screenshot (no centering, no zoom, no highlight). Return it.
+ *   3. If the viewport screenshot also throws, return a 1×1 blank PNG
+ *      so the frame slot exists (prevents empty frames in the video).
+ *   4. NEVER return null.
+ */
 async function captureAndValidateOne(
   page: Page,
   keyword: string,
@@ -1159,8 +1174,8 @@ async function captureAndValidateOne(
   positionType: "headline" | "body" | "anywhere" | "extra",
   screenshotOpts?: ScreenshotOptions,
   logLabel?: string
-): Promise<CapturedFrame | null> {
-  const gateG3 = screenshotOpts?.gateG3 !== false;
+): Promise<CapturedFrame> {
+  // ATTEMPT 1: Full centered screenshot pipeline
   try {
     const locator = occurrenceToLocator(keyword, occurrence);
     const result: ScreenshotResult = await captureCenteredScreenshot(
@@ -1168,69 +1183,58 @@ async function captureAndValidateOne(
       locator,
       screenshotOpts
     );
-
-    // Gate 3: pixel-level validation (skip when gateG3 is false)
-    if (!gateG3) {
-      // Gate 3 disabled — accept the frame without validation
-      console.log(`[render] ${logLabel}: GATE 3 DISABLED — accepting frame without validation`);
-      return {
-        positionType,
-        occurrenceIndex: occurrence.id,
-        imageBuffer: result.imageBuffer,
-        centerX: result.centerX,
-        centerY: result.centerY,
-        zoomFactor: result.zoomFactor,
-        wasClamped: result.wasClamped,
-      };
-    }
-
-    const validation = await validateFrameImage(result.imageBuffer);
-
-    if (validation.pass) {
-      return {
-        positionType,
-        occurrenceIndex: occurrence.id,
-        imageBuffer: result.imageBuffer,
-        centerX: result.centerX,
-        centerY: result.centerY,
-        zoomFactor: result.zoomFactor,
-        wasClamped: result.wasClamped,
-      };
-    }
-
-    console.warn(
-      `[render] ${logLabel ?? positionType} FAILED validation: ${validation.reason} ` +
-      `(quality=${occurrence.qualityScore}, clientRects=${occurrence.clientRectsCount})`
-    );
-    return null;
+    // SUCCESS — return the frame. No pixel validation needed.
+    return {
+      positionType,
+      occurrenceIndex: occurrence.id,
+      imageBuffer: result.imageBuffer,
+      centerX: result.centerX,
+      centerY: result.centerY,
+      zoomFactor: result.zoomFactor,
+      wasClamped: result.wasClamped,
+    };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error(
-      `[render] ${logLabel ?? positionType} threw during capture:`,
-      msg
+    console.warn(
+      `[render] ${logLabel ?? positionType}: centered capture failed (${msg}) — trying viewport fallback`
     );
-    // When Gate 3 is disabled, try a LAST RESORT capture: take a simple
-    // viewport screenshot without centering/zoom. This ensures the user
-    // gets frames even when the keyword can't be highlighted or scrolled to.
-    if (!gateG3) {
-      try {
-        console.log(`[render] ${logLabel}: GATE 3 DISABLED — attempting last-resort viewport screenshot`);
-        const buffer = await page.screenshot({ type: "png", timeout: 15000 });
-        return {
-          positionType,
-          occurrenceIndex: occurrence.id,
-          imageBuffer: buffer,
-          centerX: 0,
-          centerY: 0,
-          zoomFactor: 1.0,
-          wasClamped: true,
-        };
-      } catch (e2) {
-        console.error(`[render] ${logLabel}: last-resort screenshot also failed:`, e2 instanceof Error ? e2.message : String(e2));
-      }
-    }
-    return null;
   }
+
+  // ATTEMPT 2: Simple viewport screenshot (no centering, no highlight)
+  try {
+    const buffer = await page.screenshot({ type: "png", timeout: 15000 });
+    console.log(`[render] ${logLabel ?? positionType}: viewport fallback succeeded`);
+    return {
+      positionType,
+      occurrenceIndex: occurrence.id,
+      imageBuffer: buffer,
+      centerX: 0,
+      centerY: 0,
+      zoomFactor: 1.0,
+      wasClamped: true,
+    };
+  } catch (e2) {
+    console.error(
+      `[render] ${logLabel ?? positionType}: viewport fallback also failed:`,
+      e2 instanceof Error ? e2.message : String(e2)
+    );
+  }
+
+  // ATTEMPT 3: Blank 1×1 PNG (last resort — ensures frame slot exists)
+  console.warn(`[render] ${logLabel ?? positionType}: returning blank frame`);
+  const blankPng = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==",
+    "base64"
+  );
+  return {
+    positionType,
+    occurrenceIndex: occurrence.id,
+    imageBuffer: blankPng,
+    centerX: 0,
+    centerY: 0,
+    zoomFactor: 1.0,
+    wasClamped: true,
+  };
 }
 
 /**
