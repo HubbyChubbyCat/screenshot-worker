@@ -1,0 +1,35 @@
+name: Capture Article Frames
+on:
+  repository_dispatch:
+    types: [take-screenshot]
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Dependencies
+        run: |
+          npm install
+          npx playwright install chromium --with-deps
+
+      - name: Execute Capture Pipeline
+        env:
+          TARGET_URL: ${{ github.event.client_payload.url }}
+          KEYWORD: ${{ github.event.client_payload.keyword }}
+          ASPECT_RATIO: ${{ github.event.client_payload.aspectRatio }}
+          JOB_ID: ${{ github.event.client_payload.jobId }}
+          ARTICLE_ID: ${{ github.event.client_payload.articleId }}
+          ARTICLE_TITLE: ${{ github.event.client_payload.articleTitle }}
+          WIKIPEDIA_SECTION: ${{ github.event.client_payload.wikipediaSection }}
+          CALLBACK_URL: ${{ secrets.CALLBACK_URL }}
+        run: |
+          npx tsx scripts/capture-worker.ts
