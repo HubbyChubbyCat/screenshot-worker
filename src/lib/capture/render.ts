@@ -1160,6 +1160,7 @@ async function captureAndValidateOne(
   screenshotOpts?: ScreenshotOptions,
   logLabel?: string
 ): Promise<CapturedFrame | null> {
+  const gateG3 = screenshotOpts?.gateG3 !== false;
   try {
     const locator = occurrenceToLocator(keyword, occurrence);
     const result: ScreenshotResult = await captureCenteredScreenshot(
@@ -1169,7 +1170,6 @@ async function captureAndValidateOne(
     );
 
     // Gate 3: pixel-level validation (skip when gateG3 is false)
-    const gateG3 = screenshotOpts?.gateG3 !== false;
     if (!gateG3) {
       // Gate 3 disabled — accept the frame without validation
       console.log(`[render] ${logLabel}: GATE 3 DISABLED — accepting frame without validation`);
@@ -1204,10 +1204,31 @@ async function captureAndValidateOne(
     );
     return null;
   } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
     console.error(
       `[render] ${logLabel ?? positionType} threw during capture:`,
-      e instanceof Error ? e.message : String(e)
+      msg
     );
+    // When Gate 3 is disabled, try a LAST RESORT capture: take a simple
+    // viewport screenshot without centering/zoom. This ensures the user
+    // gets frames even when the keyword can't be highlighted or scrolled to.
+    if (!gateG3) {
+      try {
+        console.log(`[render] ${logLabel}: GATE 3 DISABLED — attempting last-resort viewport screenshot`);
+        const buffer = await page.screenshot({ type: "png", timeout: 15000 });
+        return {
+          positionType,
+          occurrenceIndex: occurrence.id,
+          imageBuffer: buffer,
+          centerX: 0,
+          centerY: 0,
+          zoomFactor: 1.0,
+          wasClamped: true,
+        };
+      } catch (e2) {
+        console.error(`[render] ${logLabel}: last-resort screenshot also failed:`, e2 instanceof Error ? e2.message : String(e2));
+      }
+    }
     return null;
   }
 }
