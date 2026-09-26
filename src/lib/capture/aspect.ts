@@ -62,3 +62,29 @@ export function dimsForAspect(ar: string | null | undefined): { width: number; h
 export function isValidAspectRatio(ar: string): ar is AspectRatio {
   return ASPECT_RATIOS.includes(ar as AspectRatio);
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Zoom level configuration
+// ─────────────────────────────────────────────────────────────────────
+
+export const ZOOM_LEVELS = ["auto", "low", "medium", "high"] as const;
+export type ZoomLevel = (typeof ZOOM_LEVELS)[number];
+
+export interface ZoomConfig {
+  minZoom: number;
+  maxZoom: number;
+}
+
+export const ZOOM_CONFIGS: Record<ZoomLevel, ZoomConfig> = {
+  auto: { minZoom: 1.0, maxZoom: 4.0 },
+  low: { minZoom: 1.0, maxZoom: 1.5 },
+  medium: { minZoom: 1.5, maxZoom: 2.5 },
+  high: { minZoom: 2.5, maxZoom: 4.0 },
+};
+
+export function getZoomConfig(level: string | null | undefined): ZoomConfig {
+  if (level && level in ZOOM_CONFIGS) {
+    return ZOOM_CONFIGS[level as ZoomLevel];
+  }
+  return ZOOM_CONFIGS.auto;
+}
