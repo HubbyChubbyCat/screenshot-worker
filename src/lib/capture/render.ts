@@ -1157,15 +1157,13 @@ async function verifyAndCapture(
  *
  * Strategy (revised 2026-09-26):
  *   1. Try captureCenteredScreenshot() — the full pipeline with highlight,
- *      centering, zoom, crop. If it succeeds, return the frame immediately.
- *      NO pixel validation — the pixel validator (Gate 3) was the #1 cause
- *      of frame rejection. The DOM-based highlight injection is reliable;
- *      if the screenshot was taken, the frame is valid.
- *   2. If captureCenteredScreenshot() throws, take a simple viewport
- *      screenshot (no centering, no zoom, no highlight). Return it.
- *   3. If the viewport screenshot also throws, return a 1×1 blank PNG
- *      so the frame slot exists (prevents empty frames in the video).
- *   4. NEVER return null.
+ *      centering, zoom, crop. If it succeeds AND the yellow highlight is
+ *      confirmed via DOM check, return the frame.
+ *   2. If captureCenteredScreenshot() throws OR the highlight is missing,
+ *      return null (NOT a viewport fallback — viewport fallbacks produce
+ *      blank/useless frames with no keyword).
+ *   3. NEVER return a viewport screenshot as a "frame" — it has no keyword
+ *      highlight and looks broken in the video.
  */
 async function captureAndValidateOne(
   page: Page,
@@ -1174,8 +1172,7 @@ async function captureAndValidateOne(
   positionType: "headline" | "body" | "anywhere" | "extra",
   screenshotOpts?: ScreenshotOptions,
   logLabel?: string
-): Promise<CapturedFrame> {
-  // ATTEMPT 1: Full centered screenshot pipeline
+): Promise<CapturedFrame | null> {
   try {
     const locator = occurrenceToLocator(keyword, occurrence);
     const result: ScreenshotResult = await captureCenteredScreenshot(
@@ -1183,58 +1180,51 @@ async function captureAndValidateOne(
       locator,
       screenshotOpts
     );
-    // SUCCESS — return the frame. No pixel validation needed.
-    return {
-      positionType,
-      occurrenceIndex: occurrence.id,
-      imageBuffer: result.imageBuffer,
-      centerX: result.centerX,
-      centerY: result.centerY,
-      zoomFactor: result.zoomFactor,
-      wasClamped: result.wasClamped,
-    };
+
+    // DOM-BASED HIGHLIGHT VERIFICATION (replaces old Gate 3 pixel validation):
+    // Check that the <mark> element exists in the DOM with yellow background.
+    // This is deterministic — no pixel analysis, no color threshold issues.
+    const highlightVerified = await page.evaluate(`(() => {
+      const marks = document.querySelectorAll('mark[data-nmc-highlight="true"]');
+      if (marks.length === 0) return { ok: false, reason: 'no_mark' };
+      const mark = marks[0];
+      const style = window.getComputedStyle(mark);
+      const bg = style.backgroundColor;
+      const hasYellow = bg === 'rgb(255, 255, 0)' || bg === '#ffff00';
+      const r = mark.getBoundingClientRect();
+      const visible = r.width > 5 && r.height > 3 &&
+                      r.top > -50 && r.bottom < (window.innerHeight + 50) &&
+                      r.left > -50 && r.right < (window.innerWidth + 50);
+      return { ok: hasYellow && visible, reason: !hasYellow ? 'no_yellow_bg' : (!visible ? 'not_visible' : 'ok'), bg, w: r.width, h: r.height };
+    })()`).catch(() => ({ ok: false, reason: 'eval_failed' })) as { ok: boolean; reason: string };
+
+    if (highlightVerified && highlightVerified.ok) {
+      // Highlight confirmed — return the frame
+      return {
+        positionType,
+        occurrenceIndex: occurrence.id,
+        imageBuffer: result.imageBuffer,
+        centerX: result.centerX,
+        centerY: result.centerY,
+        zoomFactor: result.zoomFactor,
+        wasClamped: result.wasClamped,
+      };
+    }
+
+    // Highlight NOT confirmed — this frame is useless (no keyword visible).
+    // Return null so the pipeline tries the next candidate or skips this slot.
+    console.warn(
+      `[render] ${logLabel ?? positionType}: highlight verification failed ` +
+      `(${highlightVerified?.reason ?? 'unknown'}) — skipping frame`
+    );
+    return null;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.warn(
-      `[render] ${logLabel ?? positionType}: centered capture failed (${msg}) — trying viewport fallback`
+      `[render] ${logLabel ?? positionType}: capture failed (${msg}) — skipping frame`
     );
+    return null;
   }
-
-  // ATTEMPT 2: Simple viewport screenshot (no centering, no highlight)
-  try {
-    const buffer = await page.screenshot({ type: "png", timeout: 15000 });
-    console.log(`[render] ${logLabel ?? positionType}: viewport fallback succeeded`);
-    return {
-      positionType,
-      occurrenceIndex: occurrence.id,
-      imageBuffer: buffer,
-      centerX: 0,
-      centerY: 0,
-      zoomFactor: 1.0,
-      wasClamped: true,
-    };
-  } catch (e2) {
-    console.error(
-      `[render] ${logLabel ?? positionType}: viewport fallback also failed:`,
-      e2 instanceof Error ? e2.message : String(e2)
-    );
-  }
-
-  // ATTEMPT 3: Blank 1×1 PNG (last resort — ensures frame slot exists)
-  console.warn(`[render] ${logLabel ?? positionType}: returning blank frame`);
-  const blankPng = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==",
-    "base64"
-  );
-  return {
-    positionType,
-    occurrenceIndex: occurrence.id,
-    imageBuffer: blankPng,
-    centerX: 0,
-    centerY: 0,
-    zoomFactor: 1.0,
-    wasClamped: true,
-  };
 }
 
 /**
@@ -1276,31 +1266,24 @@ export async function captureAllFrames(
 
   const captured: CapturedFrame[] = [];
   // Track occurrence IDs that have been SUCCESSFULLY CAPTURED across all
-  // positions. When a position's first-choice candidate fails Gate 3 and we
-  // fall back to the next candidate, that fallback occurrence must NOT be
-  // re-used by a later position — otherwise we get duplicate frames (same
-  // occurrence captured twice, identical image). The selection pools can
-  // overlap (e.g., bodyPool and anywherePool both contain mid-tier body
-  // occurrences), so this cross-position dedup is essential.
+  // positions. This prevents the same occurrence being captured by two
+  // different positions (e.g., body + anywhere both pick occurrence #3),
+  // which would produce identical screenshots.
   const capturedOccurrenceIds = new Set<number>();
 
   for (const pos of positions) {
     let capturedThisPos: CapturedFrame | null = null;
 
-    // SKIP GATE 3 RETRIES ON FIRST SUCCESS (optimized 2026-09-15):
-    // Only try the top 3 candidates per position. If all 3 fail, the position
-    // is left empty for Pass 2 backfill. Previously the pipeline tried ALL
-    // candidates in the pool (sometimes 10+), wasting time on low-quality
-    // occurrences that rarely pass Gate 3. The top 3 by qualityScore are
-    // almost always sufficient.
-    const MAX_CANDIDATES_PER_POSITION = 3;
+    // Try up to 5 candidates per position (increased from 3 to account for
+    // skipped occurrences that were already captured by a previous position).
+    const MAX_CANDIDATES_PER_POSITION = 5;
     const poolToTry = pos.pool.slice(0, MAX_CANDIDATES_PER_POSITION);
 
     for (let candIdx = 0; candIdx < poolToTry.length; candIdx++) {
       const occurrence = poolToTry[candIdx];
       // Skip occurrences already captured by a previous position — prevents
-      // duplicate frames when fallback picks an occurrence that's also in a
-      // later position's pool.
+      // duplicate frames when pools overlap (bodyPool and anywherePool
+      // share occurrences).
       if (capturedOccurrenceIds.has(occurrence.id)) {
         continue;
       }
@@ -1328,14 +1311,31 @@ export async function captureAllFrames(
     if (capturedThisPos) {
       captured.push(capturedThisPos);
     } else {
-      console.error(
-        `[render] ${pos.positionType}: ALL ${poolToTry.length} candidates failed — ` +
-        `leaving frame empty (Pass 2 backfill will try to fill it)`
+      // Position failed — no valid frame. Skip it (no backfill, no blank frame).
+      console.warn(
+        `[render] ${pos.positionType}: no valid frame after ${poolToTry.length} candidates — leaving empty`
       );
     }
   }
 
-  return captured;
+  // DEDUP CHECK: if any two captured frames have identical image buffers,
+  // remove the duplicate (keep only the first). This is a safety net for
+  // cases where different occurrences produced the same screenshot (e.g.,
+  // the page didn't scroll between captures).
+  const uniqueFrames: CapturedFrame[] = [];
+  const seenBufferHashes = new Set<string>();
+  for (const frame of captured) {
+    // Quick hash of the first 1000 bytes (enough to detect duplicates)
+    const hash = frame.imageBuffer.subarray(0, 1000).toString('base64');
+    if (seenBufferHashes.has(hash)) {
+      console.warn(`[render] DEDUP: removing duplicate frame (${frame.positionType})`);
+      continue;
+    }
+    seenBufferHashes.add(hash);
+    uniqueFrames.push(frame);
+  }
+
+  return uniqueFrames;
 }
 
 /**
