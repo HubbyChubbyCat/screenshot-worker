@@ -299,26 +299,21 @@ export async function renderArticle(
 ): Promise<RenderResult> {
   const hint = opts.routeHint ?? "auto";
 
-  // Wikipedia-accepted articles re-rendered by later passes carry a
-  // #wiki-sec-N fragment. Re-running the full ladder would land on the LIVE
-  // wikipedia page via 'direct' (different layout, FULL article text → same
-  // content as the first wikipedia article → duplicate frames). Instead,
-  // pin the ladder to the wikipedia card renderer, which rebuilds the exact
-  // same section card as the original accept.
-  const isWikiCardUrl = /^https?:\/\/en\.wikipedia\.org\/wiki\//i.test(url);
+  // Wikipedia fallback REMOVED (2026-09-26):
+  // The Wikipedia route rendered the same card for different articles,
+  // producing duplicate frames. It has been removed from the fallback
+  // ladder entirely. If an article URL is a Wikipedia page, it will be
+  // tried via 'direct' route (which loads the live Wikipedia page —
+  // different from the old card renderer, so no duplicates).
 
   const ladder: CaptureRoute[] =
     hint === "direct"
       ? ["direct"]
       : hint === "reader"
       ? ["reader"]
-      : hint === "wikipedia"
-      ? ["wikipedia"]
       : hint === "synthetic"
       ? ["synthetic"]
-      : isWikiCardUrl
-      ? ["wikipedia"]
-      : ["direct", "googlecache", "wayback", "archive", "reader", "opengraph", "reddit", "wikipedia", "synthetic"];
+      : ["direct", "googlecache", "wayback", "archive", "reader", "opengraph", "reddit", "synthetic"];
 
   // The canonical publisher URL — refined after the direct attempt resolves
   // Google News redirects, so mirror routes target the REAL article.
