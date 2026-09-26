@@ -153,8 +153,14 @@ async function main() {
       callbackPayload.success = false;
       // Always set a descriptive skip reason for debugging
       if (result.outcome === "accepted" && (!result.capturedFrames || result.capturedFrames.length === 0)) {
-        // Article was accepted (keyword found) but 0 frames captured (Gate 3 rejected all)
-        callbackPayload.skipReason = "accepted_but_no_frames:gate3_rejected_all";
+        // Article was accepted (keyword found) but 0 frames captured.
+        // This could be from Gate 3 rejection OR from capture throws
+        // (highlight failure, scroll failure, etc.)
+        if (!gateG3) {
+          callbackPayload.skipReason = "accepted_but_no_frames:capture_threw_all_candidates";
+        } else {
+          callbackPayload.skipReason = "accepted_but_no_frames:gate3_or_capture_failed";
+        }
       } else {
         callbackPayload.skipReason = result.skipReason || `render_outcome:${result.outcome}`;
       }
