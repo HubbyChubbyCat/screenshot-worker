@@ -54,6 +54,8 @@ async function main() {
   const keyword = process.env.KEYWORD;
   const aspectRatio = process.env.ASPECT_RATIO || "16:9";
   const zoomLevel = process.env.ZOOM_LEVEL || "auto";
+  const gateG2 = process.env.GATE_G2 !== "false";
+  const gateG3 = process.env.GATE_G3 !== "false";
   const jobId = process.env.JOB_ID;
   const articleId = process.env.ARTICLE_ID;
   // The CALLBACK_URL secret is the BASE server URL (e.g., https://preview-xxx.space-z.ai)
@@ -116,6 +118,8 @@ async function main() {
         maxZoom: zoomCfg.maxZoom,
         frameWidth: aspectCfg.width,
         frameHeight: aspectCfg.height,
+        gateG2,
+        gateG3,
       },
     });
 
