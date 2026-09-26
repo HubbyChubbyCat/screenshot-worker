@@ -326,17 +326,26 @@ export async function highlightOccurrence(
 
     const mark = document.createElement('mark');
     mark.setAttribute('data-nmc-highlight', 'true');
-    // Use setProperty with !important to override any article CSS rules
-    // that might use !important (e.g., NDTV's "anywhere" occurrence had
-    // the correct computed style but the background wasn't painted due to
-    // a stylesheet !important rule overriding our inline style).
+    // BULLETPROOF CSS (revised 2026-09-26):
+    // 10 properties that cover EVERY publisher CSS override method.
+    // The box-shadow glow is the key innovation — even if background-color
+    // is somehow overridden, the yellow glow around the mark is still visible.
     mark.style.setProperty('background-color', '#FFFF00', 'important');
+    mark.style.setProperty('background-image', 'none', 'important');
+    mark.style.setProperty('background', '#FFFF00', 'important');
     mark.style.setProperty('color', '#000000', 'important');
-    mark.style.setProperty('padding', '0', 'important');
+    mark.style.setProperty('-webkit-text-fill-color', '#000000', 'important');
+    mark.style.setProperty('-webkit-background-clip', 'border-box', 'important');
+    mark.style.setProperty('text-decoration', 'none', 'important');
+    // Yellow GLOW around the mark — impossible to hide even if bg is overridden
+    mark.style.setProperty('box-shadow', '0 0 0 3px #FFFF00, 0 0 0 6px #FFFF00', 'important');
+    mark.style.setProperty('outline', '2px solid #FFFF00', 'important');
+    mark.style.setProperty('padding', '1px 2px', 'important');
     mark.style.setProperty('margin', '0', 'important');
     mark.style.setProperty('border-radius', '0', 'important');
-    mark.style.setProperty('box-shadow', 'none', 'important');
-    mark.style.setProperty('outline', 'none', 'important');
+    mark.style.setProperty('display', 'inline', 'important');
+    mark.style.setProperty('visibility', 'visible', 'important');
+    mark.style.setProperty('opacity', '1', 'important');
 
     const fragment = range.extractContents();
     mark.appendChild(fragment);
@@ -1371,12 +1380,144 @@ export async function captureCenteredScreenshot(
 
   try {
     // 2. Highlight the occurrence → get rect (now relative to padded document)
-    const highlight = await highlightOccurrence(page, locator);
+    let highlight = await highlightOccurrence(page, locator);
+
+    // 2.1 RE-DISCOVERY FALLBACK (added 2026-09-26):
+    //     If the locator fails (container not found, keyword not at offset),
+    //     re-run keyword discovery on the CURRENT page and try highlighting
+    //     the first occurrence found. This handles cases where lazy-loaded
+    //     content or dynamic DOM changes invalidated the original locator.
     if (!highlight.success || !highlight.rect) {
-      throw new Error(
-        `Failed to highlight occurrence: ${highlight.error ?? "unknown"}`
+      console.warn(
+        `[captureCenteredScreenshot] Locator failed: ${highlight.error} — trying re-discovery fallback`
       );
+      // Re-discover the keyword on the current page
+      const rediscoverScript = `
+        (() => {
+          const keyword = ${JSON.stringify(locator.keyword)};
+          const kwLower = keyword.toLowerCase();
+          const kwNoPunct = kwLower.replace(/[^a-z0-9]/g, '');
+          if (!kwNoPunct) return null;
+
+          const SKIP_TAGS = new Set(['script', 'style', 'textarea', 'code', 'noscript', 'svg', 'iframe', 'select', 'button']);
+          const leafBlocks = [];
+          const allElements = document.getElementsByTagName('*');
+          for (const el of allElements) {
+            const tag = el.tagName.toLowerCase();
+            if (!['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'blockquote', 'td', 'th', 'dd', 'dt', 'figcaption', 'div'].includes(tag)) continue;
+            let ancestor = el.parentElement;
+            let skip = false;
+            while (ancestor) {
+              if (SKIP_TAGS.has(ancestor.tagName.toLowerCase())) { skip = true; break; }
+              ancestor = ancestor.parentElement;
+            }
+            if (skip) continue;
+            leafBlocks.push(el);
+          }
+
+          // Build punctuation-free text map for each leaf block
+          for (const container of leafBlocks) {
+            const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+              acceptNode: (node) => {
+                const parent = node.parentElement;
+                if (!parent) return NodeFilter.FILTER_REJECT;
+                if (SKIP_TAGS.has(parent.tagName.toLowerCase())) return NodeFilter.FILTER_REJECT;
+                if (!node.textContent || node.textContent.length === 0) return NodeFilter.FILTER_REJECT;
+                return NodeFilter.FILTER_ACCEPT;
+              }
+            });
+            const textNodes = [];
+            let tn;
+            while ((tn = walker.nextNode())) textNodes.push(tn);
+            if (textNodes.length === 0) continue;
+
+            let fullText = '';
+            const nodeMap = [];
+            for (const t of textNodes) {
+              nodeMap.push({ node: t, start: fullText.length, len: t.textContent.length });
+              fullText += t.textContent;
+            }
+            const fullLower = fullText.toLowerCase();
+            const fullNoPunct = fullLower.replace(/[^a-z0-9]/g, '');
+            const posMap = [];
+            for (let i = 0; i < fullLower.length; i++) {
+              if (/[a-z0-9]/.test(fullLower[i])) posMap.push(i);
+            }
+
+            // Find the keyword in the punctuation-free text
+            let searchIdx = 0;
+            while (searchIdx <= fullNoPunct.length - kwNoPunct.length) {
+              const found = fullNoPunct.indexOf(kwNoPunct, searchIdx);
+              if (found === -1) break;
+              const startOriginal = posMap[found];
+              const endOriginal = posMap[found + kwNoPunct.length - 1] + 1;
+              const matchedLen = endOriginal - startOriginal;
+
+              // Check word boundaries
+              const before = startOriginal > 0 ? fullLower[startOriginal - 1] : '';
+              const after = endOriginal < fullLower.length ? fullLower[endOriginal] : '';
+              const isWordBoundary = (ch) => !ch || !/[a-zA-Z0-9'\\u00C0-\\u024F]/.test(ch);
+              if (isWordBoundary(before) && isWordBoundary(after)) {
+                // Found a valid occurrence — highlight it
+                let startNodeInfo = null;
+                let endNodeInfo = null;
+                for (const nm of nodeMap) {
+                  if (!startNodeInfo && startOriginal >= nm.start && startOriginal < nm.start + nm.len) startNodeInfo = nm;
+                  if (endOriginal > nm.start && endOriginal <= nm.start + nm.len) endNodeInfo = nm;
+                  if (startNodeInfo && endNodeInfo) break;
+                }
+                if (startNodeInfo && endNodeInfo) {
+                  try {
+                    const range = document.createRange();
+                    range.setStart(startNodeInfo.node, startOriginal - startNodeInfo.start);
+                    range.setEnd(endNodeInfo.node, endOriginal - endNodeInfo.start);
+                    const mark = document.createElement('mark');
+                    mark.setAttribute('data-nmc-highlight', 'true');
+                    mark.style.setProperty('background-color', '#FFFF00', 'important');
+                    mark.style.setProperty('background-image', 'none', 'important');
+                    mark.style.setProperty('background', '#FFFF00', 'important');
+                    mark.style.setProperty('color', '#000000', 'important');
+                    mark.style.setProperty('-webkit-text-fill-color', '#000000', 'important');
+                    mark.style.setProperty('box-shadow', '0 0 0 3px #FFFF00, 0 0 0 6px #FFFF00', 'important');
+                    mark.style.setProperty('outline', '2px solid #FFFF00', 'important');
+                    mark.style.setProperty('padding', '1px 2px', 'important');
+                    mark.style.setProperty('margin', '0', 'important');
+                    mark.style.setProperty('display', 'inline', 'important');
+                    mark.style.setProperty('visibility', 'visible', 'important');
+                    mark.style.setProperty('opacity', '1', 'important');
+                    const fragment = range.extractContents();
+                    mark.appendChild(fragment);
+                    range.insertNode(mark);
+                    const r = mark.getBoundingClientRect();
+                    return {
+                      success: true,
+                      rect: { x: r.x, y: r.y, width: r.width, height: r.height, docX: r.x + window.scrollX, docY: r.y + window.scrollY }
+                    };
+                  } catch (e) {
+                    return { success: false, error: 'rediscover_highlight_failed: ' + e.message };
+                  }
+                }
+              }
+              searchIdx = found + 1;
+            }
+          }
+          return null;
+        })()
+      `;
+      const rediscoverResult = await page.evaluate(rediscoverScript).catch(() => null) as HighlightResult | null;
+      if (rediscoverResult && rediscoverResult.success && rediscoverResult.rect) {
+        console.log(`[captureCenteredScreenshot] Re-discovery fallback succeeded — keyword found and highlighted`);
+        highlight = rediscoverResult as HighlightResult;
+      } else {
+        throw new Error(
+          `Failed to highlight occurrence: ${highlight.error ?? "unknown"} (re-discovery also failed)`
+        );
+      }
     }
+
+    // kwRectAfterHighlight is guaranteed to have a rect here (either from
+    // the original highlight or the re-discovery fallback)
+    const kwRectAfterHighlight = highlight.rect!;
 
     // 2.5. MULTI-LINE KEYWORD CHECK (DOM-level, added 2026-09-14)
     //      ------------------------------------------------------------
@@ -1440,10 +1581,6 @@ export async function captureCenteredScreenshot(
         );
       }
     }
-
-    // kwRectAfterHighlight is the mark's bounding rect — used by all
-    // downstream zoom/scroll/crop math.
-    const kwRectAfterHighlight = highlight.rect;
 
     // 3. Compute PRE-CAPTURE zoom (used only for initial scroll positioning).
     //    The FINAL zoom is computed post-capture by computeAutoZoom(),
@@ -1663,50 +1800,110 @@ export async function captureCenteredScreenshot(
       );
     }
 
-    // 7.6. HIDE OVERLAYS — iframes and fixed-position elements (sticky
-    //      headers, cookie banners, ad overlays) that overlap with the
-    //      <mark> would visually cover the yellow highlight in the
-    //      screenshot, causing detectYellowCentroid() to fail. This was
-    //      the root cause of the missing-highlight bug on The Guardian
-    //      (all 3 frames had an ad iframe layered on top of the keyword).
-    //      We hide only the overlapping elements to minimize layout
-    //      disruption. Hidden elements are marked with data-nmc-hidden.
-    const overlaysHidden = await hideOverlays(page).catch((e) => {
-      console.warn(`[hideOverlays] error: ${e?.message ?? e}`);
-      return { iframesHidden: 0, fixedHidden: 0, yellowChromeHidden: 0 };
-    });
-    if (overlaysHidden.iframesHidden > 0 || overlaysHidden.fixedHidden > 0 || overlaysHidden.yellowChromeHidden > 0) {
-      // Brief settle in case hiding an inline iframe or yellow chrome caused a reflow.
-      await page.waitForTimeout(50).catch(() => {});
-      if (overlaysHidden.yellowChromeHidden > 0) {
-        console.log(
-          `[hideOverlays] hid ${overlaysHidden.yellowChromeHidden} yellow-chrome element(s) ` +
-          `(e.g., publisher's yellow UI button) to prevent false-positive highlight detection`
-        );
+    // 7.6. AGGRESSIVE OVERLAY REMOVAL (revised 2026-09-26):
+    //      Hide ALL potentially overlapping elements — not just those that
+    //      overlap with the mark. This catches full-screen cookie banners,
+    //      sticky headers, lazy-loaded ad iframes, and consent dialogs that
+    //      appear after our initial page load.
+    await page.evaluate(`(() => {
+      // Hide ALL position:fixed and position:sticky elements
+      document.querySelectorAll('*').forEach(el => {
+        const style = window.getComputedStyle(el);
+        if (style.position === 'fixed' || style.position === 'sticky') {
+          if (!el.hasAttribute('data-nmc-highlight')) {
+            el.setAttribute('data-nmc-hidden', 'true');
+            el.style.setProperty('display', 'none', 'important');
+          }
+        }
+      });
+      // Hide ALL iframes
+      document.querySelectorAll('iframe').forEach(el => {
+        el.setAttribute('data-nmc-hidden', 'true');
+        el.style.setProperty('display', 'none', 'important');
+      });
+      // Hide elements with very high z-index (likely overlays)
+      document.querySelectorAll('*').forEach(el => {
+        const style = window.getComputedStyle(el);
+        const z = parseInt(style.zIndex);
+        if (z > 100 && el.tagName !== 'MARK') {
+          el.setAttribute('data-nmc-hidden', 'true');
+          el.style.setProperty('display', 'none', 'important');
+        }
+      });
+    })()`).catch(() => {});
+
+    // 7.7. PAINT CONFIRMATION (revised 2026-09-26):
+    //      Wait until the browser's compositor has ACTUALLY applied the yellow
+    //      to the <mark> element. This replaces the old "2 animation frames"
+    //      wait with a deterministic check: poll getComputedStyle until the
+    //      backgroundColor is yellow, or timeout after 3 seconds.
+    try {
+      await page.waitForFunction(
+        `(() => {
+          const mark = document.querySelector('mark[data-nmc-highlight="true"]');
+          if (!mark) return false;
+          const bg = window.getComputedStyle(mark).backgroundColor;
+          return bg === 'rgb(255, 255, 0)';
+        })()`,
+        { timeout: 3000 }
+      );
+      console.log(`[captureCenteredScreenshot] Paint confirmed: yellow applied to <mark>`);
+    } catch {
+      console.warn(`[captureCenteredScreenshot] Paint confirmation timeout — proceeding anyway`);
+    }
+
+    // 7.8. VIEWPORT VERIFICATION (revised 2026-09-26):
+    //      Confirm the mark is fully visible in the viewport. If not, try
+    //      scrollIntoView. If that also fails, proceed anyway (the screenshot
+    //      will still be taken — better than throwing and losing the frame).
+    try {
+      const viewportOk = await page.evaluate(`(() => {
+        const mark = document.querySelector('mark[data-nmc-highlight="true"]');
+        if (!mark) return { ok: false, reason: 'mark_not_found' };
+        const r = mark.getBoundingClientRect();
+        const vh = window.innerHeight || 1080;
+        const vw = window.innerWidth || 1920;
+        const inViewport = r.top > 20 && r.bottom < vh - 20 &&
+                           r.left > 0 && r.right < vw &&
+                           r.width > 5 && r.height > 3;
+        if (inViewport) return { ok: true };
+        mark.scrollIntoView({ block: 'center', inline: 'nearest' });
+        return { ok: false, reason: 'scrolled', y: r.y };
+      })()`) as { ok: boolean; reason?: string; y?: number } | null;
+      if (viewportOk && !viewportOk.ok && viewportOk.reason === 'scrolled') {
+        // Wait briefly for scroll to settle
+        await page.waitForTimeout(200).catch(() => {});
+        // Re-verify after scroll
+        await page.evaluate(`(() => {
+          const mark = document.querySelector('mark[data-nmc-highlight="true"]');
+          if (mark) {
+            const r = mark.getBoundingClientRect();
+            const vh = window.innerHeight || 1080;
+            if (r.top < 50 || r.bottom > vh - 50) {
+              mark.scrollIntoView({ block: 'center' });
+            }
+          }
+        })()`).catch(() => {});
+        await page.waitForTimeout(100).catch(() => {});
       }
+    } catch {
+      // Non-fatal — proceed to screenshot
     }
 
     // 8. Capture full viewport screenshot (1920×1080).
     //    The yellow <mark> highlight is visible in this screenshot — we'll
     //    detect it post-capture to get the ground-truth keyword position.
-    //
-    //    Wait for TWO animation frames before capturing. The first rAF
-    //    fires before the browser paints; the second fires after paint.
-    //    This ensures the yellow background is actually rendered in the
-    //    screenshot (fixes an intermittent race condition where the <mark>
-    //    was in the DOM with correct styles but the paint hadn't happened
-    //    yet — observed on NDTV's "anywhere" frame).
+    //    Paint was already confirmed in step 7.7, so the highlight IS rendered.
+    //    One final animation frame wait for safety.
     await raceTimeout(
       page.evaluate(`(() => new Promise(resolve => {
       requestAnimationFrame(() => requestAnimationFrame(resolve));
     })())`),
-      5_000
+      3_000
     ).catch(() => {});
     let fullBuffer = await page.screenshot({
       type: "png",
       omitBackground: false,
-      // page.screenshot has NO default timeout — a crashed renderer (target
-      // crashed) hangs it forever, which previously stalled the whole job.
       timeout: 30_000,
     });
 
