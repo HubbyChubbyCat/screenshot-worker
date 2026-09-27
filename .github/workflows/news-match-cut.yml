@@ -172,7 +172,7 @@ jobs:
                   } catch {}
                   
                   // Highlight keyword
-                  const highlightResult = await page.evaluate((kw, css) => {
+                  const highlightResult = await page.evaluate(({ kw, css }) => {
                     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
                       acceptNode(node) {
                         const parent = node.parentElement;
@@ -224,7 +224,7 @@ jobs:
                     if (rect.width === 0 || rect.height === 0) return null;
                     
                     return { kx: rect.left + rect.width/2, ky: rect.top + rect.height/2, kw: rect.width, kh: rect.height };
-                  }, keyword, highlightCSS);
+                  }, { kw: keyword, css: highlightCSS });
                   
                   if (!highlightResult) {
                     console.log('  Keyword not found, skipping');
