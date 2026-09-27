@@ -198,8 +198,8 @@ jobs:
                 // in the actual screenshot pixels.
                 
                 const zoom = 2.5;
-                const targetX = 0.24;  // keyword at 24% from left
-                const targetY = 0.50;  // keyword at 50% from top (center)
+                const targetX = 0.50;  // keyword at 50% from left (perfectly centered)
+                const targetY = 0.50;  // keyword at 50% from top (perfectly centered)
                 
                 const clipW = aspectW / zoom;   // 1280/2.5 = 512
                 const clipH = aspectH / zoom;   // 720/2.5 = 288
