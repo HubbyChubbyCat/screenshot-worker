@@ -134,7 +134,7 @@ jobs:
               await page.waitForTimeout(300);
               
               // Highlight the keyword in the FIRST result title only
-              await page.evaluate((keyword, css) => {
+              await page.evaluate(({ keyword, css }) => {
                 // For Bing video, titles might be in different selectors
                 let titleLink = document.querySelector('#b_results li.b_algo h2 a');
                 if (!titleLink) titleLink = document.querySelector('.mc_vtvc_title a, .vrhtitle a, h2 a');
@@ -155,7 +155,7 @@ jobs:
                 span.textContent = match;
                 titleLink.appendChild(span);
                 titleLink.appendChild(document.createTextNode(after));
-              }, query, highlightCSS);
+              }, { keyword: query, css: highlightCSS });
               await page.waitForTimeout(300);
               
               // Scroll to top
