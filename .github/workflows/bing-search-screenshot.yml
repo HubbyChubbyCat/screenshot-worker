@@ -78,6 +78,8 @@ jobs:
                 searchUrl = 'https://www.bing.com/videos/search?q=' + encodeURIComponent(query) + '&setlang=en&cc=US';
               } else if (frameType === 'wikipedia') {
                 searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(query + ' Wikipedia') + '&setlang=en&cc=US';
+              } else if (frameType === 'knowledge-panel') {
+                searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(query) + '&setlang=en&cc=US';
               } else {
                 // bing-results (default)
                 searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(query) + '&setlang=en&cc=US';
@@ -336,6 +338,194 @@ jobs:
                 return;
               }
               
+              // For Knowledge Panel frame: find the entity card on the right side
+              // of the Bing results, highlight the keyword in its title, screenshot.
+              if (frameType === 'knowledge-panel') {
+                // Wait for the entity card to load
+                await page.waitForTimeout(3000);
+
+                // Find the knowledge panel / entity card
+                // Bing uses #b_context, .b_entity, .b_card, or similar for the right sidebar
+                const kpResult = await page.evaluate((keyword) => {
+                  // Try multiple selectors for the knowledge panel
+                  const selectors = [
+                    '#b_context .b_entity',
+                    '#b_context .b_card',
+                    '#b_context .b_factrow',
+                    '.b_entity',
+                    '#b_context',
+                    '[data-tag*=EntityCard]',
+                    '.b_canvas .b_entity'
+                  ];
+
+                  let panel = null;
+                  let usedSelector = '';
+                  for (const sel of selectors) {
+                    panel = document.querySelector(sel);
+                    if (panel) {
+                      usedSelector = sel;
+                      break;
+                    }
+                  }
+
+                  if (!panel) {
+                    // Fallback: search for elements containing the keyword in the right half
+                    const allEls = document.querySelectorAll('#b_results *');
+                    for (const el of allEls) {
+                      const rect = el.getBoundingClientRect();
+                      // Right half of the page
+                      if (rect.left > window.innerWidth * 0.5 && rect.width > 100 && rect.width < 500) {
+                        if (el.textContent && el.textContent.toLowerCase().includes(keyword.toLowerCase())) {
+                          panel = el;
+                          usedSelector = 'right-side-fallback';
+                          break;
+                        }
+                      }
+                    }
+                  }
+
+                  if (!panel) {
+                    return { found: false, reason: 'No knowledge panel found', selectors_tried: selectors };
+                  }
+
+                  // Find the title element within the panel
+                  const titleSelectors = ['h2', 'h1', '.b_entityTitle', '.b_promtxt', 'strong', 'a'];
+                  let titleEl = null;
+                  for (const ts of titleSelectors) {
+                    titleEl = panel.querySelector(ts);
+                    if (titleEl && titleEl.textContent && titleEl.textContent.trim().length > 0) {
+                      break;
+                    }
+                    titleEl = null;
+                  }
+
+                  if (!titleEl) {
+                    return { found: true, hasTitle: false, usedSelector };
+                  }
+
+                  const titleText = titleEl.textContent.trim();
+                  
+                  // Highlight the keyword in the title
+                  const lower = titleText.toLowerCase();
+                  const klower = keyword.toLowerCase();
+                  const idx = lower.indexOf(klower);
+
+                  if (idx !== -1) {
+                    const before = titleText.substring(0, idx);
+                    const match = titleText.substring(idx, idx + keyword.length);
+                    const after = titleText.substring(idx + keyword.length);
+                    titleEl.innerHTML = '';
+                    titleEl.appendChild(document.createTextNode(before));
+                    const span = document.createElement('span');
+                    span.setAttribute('style', 'background: #FFFF00; color: #000000; padding: 0 3px; border-radius: 2px; font-weight: 700;');
+                    span.textContent = match;
+                    titleEl.appendChild(span);
+                    titleEl.appendChild(document.createTextNode(after));
+
+                    const rect = titleEl.getBoundingClientRect();
+                    return {
+                      found: true,
+                      hasTitle: true,
+                      highlighted: true,
+                      usedSelector,
+                      title: titleText,
+                      kx: rect.left + rect.width / 2,
+                      ky: rect.top + rect.height / 2,
+                      kw: rect.width,
+                      kh: rect.height,
+                    };
+                  }
+
+                  // Keyword not in title — try any text element in the panel
+                  const allText = panel.querySelectorAll('*');
+                  for (const el of allText) {
+                    if (el.children.length === 0) {
+                      const text = (el.textContent || '').trim();
+                      const ltext = text.toLowerCase();
+                      const kidx = ltext.indexOf(klower);
+                      if (kidx !== -1 && text.length < 200) {
+                        const before = text.substring(0, kidx);
+                        const match = text.substring(kidx, kidx + keyword.length);
+                        const after = text.substring(kidx + keyword.length);
+                        el.innerHTML = '';
+                        el.appendChild(document.createTextNode(before));
+                        const span = document.createElement('span');
+                        span.setAttribute('style', 'background: #FFFF00; color: #000000; padding: 0 3px; border-radius: 2px; font-weight: 700;');
+                        span.textContent = match;
+                        el.appendChild(span);
+                        el.appendChild(document.createTextNode(after));
+
+                        const rect = el.getBoundingClientRect();
+                        return {
+                          found: true,
+                          hasTitle: true,
+                          highlighted: true,
+                          usedSelector,
+                          title: text.substring(0, 80),
+                          kx: rect.left + rect.width / 2,
+                          ky: rect.top + rect.height / 2,
+                          kw: rect.width,
+                          kh: rect.height,
+                        };
+                      }
+                    }
+                  }
+
+                  return { found: true, hasTitle: true, highlighted: false, usedSelector, title: titleText };
+                }, query);
+                console.log('Knowledge panel result:', JSON.stringify(kpResult));
+
+                // Scroll the panel into view if found
+                if (kpResult && kpResult.found) {
+                  await page.evaluate(() => {
+                    const panel = document.querySelector('#b_context .b_entity, #b_context .b_card, .b_entity, #b_context');
+                    if (panel) panel.scrollIntoView({ block: 'center' });
+                  });
+                  await page.waitForTimeout(1000);
+                }
+
+                // Get the final keyword position (re-read after scroll)
+                const kpPositioning = await page.evaluate(() => {
+                  const span = document.querySelector('span[style*=FFFF00], span[style*=background]');
+                  if (!span) return null;
+                  const rect = span.getBoundingClientRect();
+                  return {
+                    kx: rect.left + rect.width / 2,
+                    ky: rect.top + rect.height / 2,
+                    kw: rect.width,
+                    kh: rect.height,
+                  };
+                });
+                console.log('KP keyword position:', JSON.stringify(kpPositioning));
+
+                // Take full screenshot (server will crop to center)
+                const kpFullBuffer = await page.screenshot({ type: 'png', fullPage: false });
+                const kpFullBase64 = kpFullBuffer.toString('base64');
+                console.log('KP screenshot size:', kpFullBuffer.length, 'bytes');
+
+                await browser.close();
+
+                await fetch(callbackUrl, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    searchId: searchId,
+                    success: true,
+                    query: query,
+                    frameType: frameType,
+                    screenshot: kpFullBase64,
+                    titles: [kpResult && kpResult.title ? kpResult.title : query],
+                    keywordX: kpPositioning ? kpPositioning.kx : 0,
+                    keywordY: kpPositioning ? kpPositioning.ky : 0,
+                    keywordW: kpPositioning ? kpPositioning.kw : 0,
+                    keywordH: kpPositioning ? kpPositioning.kh : 0,
+                    deviceScaleFactor: 2,
+                  })
+                });
+                console.log('Callback sent with KP screenshot');
+                return;
+              }
+
               // Log the first few result titles for debugging
               const titles = await page.evaluate(() => {
                 const links = document.querySelectorAll('#b_results li.b_algo h2 a, .b_algo h2 a');
