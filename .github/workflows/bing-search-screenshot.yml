@@ -298,30 +298,40 @@ jobs:
                 }, query);
                 console.log('PAA result:', JSON.stringify(paaResult));
                 
-                // Debug: find ALL text containing ? on the page
-                const allQuestionTexts = await page.evaluate(() => {
-                  const results = [];
-                  const all = document.querySelectorAll('*');
-                  for (const el of all) {
-                    // Check the element own text (not children)
-                    const ownText = Array.from(el.childNodes)
-                      .filter(n => n.nodeType === 3)
-                      .map(n => n.textContent.trim())
-                      .join(' ');
-                    if (ownText.includes('?') && ownText.length > 10 && ownText.length < 200) {
-                      results.push({
-                        tag: el.tagName,
-                        class: (el.className || '').toString().substring(0, 60),
-                        id: el.id || '',
-                        text: ownText.substring(0, 120),
-                        parentClass: (el.parentElement?.className || '').toString().substring(0, 60),
-                        parentTag: el.parentElement?.tagName || ''
-                      });
-                    }
+                // Debug: check iframes and shadow DOM
+                const debugInfo = await page.evaluate(() => {
+                  const iframes = document.querySelectorAll('iframe');
+                  const iframeInfo = Array.from(iframes).map(f => ({
+                    src: f.src?.substring(0, 100) || '',
+                    id: f.id || '',
+                    class: f.className?.substring(0, 50) || '',
+                    width: f.width,
+                    height: f.height
+                  }));
+                  
+                  // Check for shadow roots
+                  let shadowCount = 0;
+                  const allEls = document.querySelectorAll('*');
+                  for (const el of allEls) {
+                    if (el.shadowRoot) shadowCount++;
                   }
-                  return results;
+                  
+                  // Get ALL text from the body using textContent (not innerText)
+                  const fullText = document.body.textContent || '';
+                  const questionMatches = fullText.match(/[^.!?]*\?/g) || [];
+                  
+                  return {
+                    iframeCount: iframes.length,
+                    iframes: iframeInfo.slice(0, 5),
+                    shadowRootCount: shadowCount,
+                    fullTextLength: fullText.length,
+                    questionsInTextContent: questionMatches.slice(0, 10),
+                    hasPeopleAlsoAsk: fullText.includes('People also ask'),
+                    hasRelatedQuestions: fullText.includes('Related questions'),
+                    hasAlsoAsk: fullText.toLowerCase().includes('also ask')
+                  };
                 });
-                console.log('All question texts:', JSON.stringify(allQuestionTexts).substring(0, 4000));
+                console.log('Debug info:', JSON.stringify(debugInfo).substring(0, 4000));
 
                 // Scroll the highlighted keyword into view
                 await page.evaluate(() => {
