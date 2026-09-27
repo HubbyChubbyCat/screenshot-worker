@@ -199,86 +199,109 @@ jobs:
               // For People Also Ask frame: find the PAA section, highlight the
               // keyword in one of the questions, take a screenshot.
               if (frameType === 'people-also-ask') {
-                // Find the People Also Ask section
-                // Bing uses .b_algoBottomAnomaly, .b_ans, or #b_results .df_top
-                // The PAA questions are in .b_algoBottomAnomaly .b_promtxt or
-                // .b_ans .b_promtxt or similar selectors
-                const paaFound = await page.evaluate((keyword) => {
-                  // Try multiple selectors for PAA questions
-                  let questions = document.querySelectorAll('.b_algoBottomAnomaly .b_promtxt, .b_ans .b_promtxt, .b_entity .b_promtxt, [data-tag*=RelatedSearches] .b_promtxt');
-                  if (questions.length === 0) {
-                    // Fallback: look for any element containing People also ask
-                    const allElements = document.querySelectorAll('#b_results *');
-                    for (const el of allElements) {
-                      if (el.children.length === 0 && el.textContent && el.textContent.includes('People also ask')) {
-                        // Found the PAA header, now find questions below it
-                        questions = el.parentElement.parentElement.querySelectorAll('.b_promtxt, .b_algoBottomAnomaly a, .df_top');
+                // Scroll down to load the PAA section (it is usually below the fold)
+                await page.evaluate(() => {
+                  window.scrollTo(0, document.body.scrollHeight);
+                });
+                await page.waitForTimeout(2000);
+                await page.evaluate(() => window.scrollTo(0, 0));
+                await page.waitForTimeout(1000);
+
+                // Find and highlight the keyword in PAA questions
+                const paaResult = await page.evaluate((keyword) => {
+                  // Strategy 1: Find the People also ask header, then find questions below it
+                  const allElements = Array.from(document.querySelectorAll('#b_results *'));
+                  let paaHeader = null;
+                  for (const el of allElements) {
+                    if (el.children.length === 0) {
+                      const text = (el.textContent || '').trim();
+                      if (text === 'People also ask' || text === 'People Also Ask') {
+                        paaHeader = el;
                         break;
                       }
                     }
                   }
-                  
-                  if (questions.length === 0) return { found: false, count: 0 };
-                  
+
+                  // Strategy 2: If no header found, look for elements with b_promtxt class
+                  let questionElements = [];
+                  if (paaHeader) {
+                    // Walk up to find the container, then find all question-like elements
+                    let container = paaHeader;
+                    for (let i = 0; i < 5 && container.parentElement; i++) {
+                      container = container.parentElement;
+                    }
+                    // Find all text elements that look like questions (end with ?)
+                    questionElements = Array.from(container.querySelectorAll('*')).filter(el => {
+                      if (el.children.length > 0) return false;
+                      const text = (el.textContent || '').trim();
+                      return text.length > 10 && text.includes('?');
+                    });
+                  }
+
+                  // Strategy 3: Fallback - search all questions on the page
+                  if (questionElements.length === 0) {
+                    questionElements = Array.from(document.querySelectorAll('#b_results *')).filter(el => {
+                      if (el.children.length > 0) return false;
+                      const text = (el.textContent || '').trim();
+                      return text.length > 10 && text.includes('?') && text.length < 200;
+                    });
+                  }
+
+                  if (questionElements.length === 0) {
+                    return { found: false, reason: 'No questions found', paaHeaderFound: !!paaHeader };
+                  }
+
                   // Find the first question that contains the keyword
                   let highlighted = false;
-                  for (const q of questions) {
+                  let highlightInfo = null;
+                  for (const q of questionElements) {
                     const text = q.textContent || '';
-                    if (text.toLowerCase().includes(keyword.toLowerCase())) {
-                      // Wrap the keyword in a highlight span
-                      const walker = document.createTreeWalker(q, NodeFilter.SHOW_TEXT, {
-                        acceptNode(node) {
-                          if (node.textContent && node.textContent.toLowerCase().includes(keyword.toLowerCase())) {
-                            return NodeFilter.FILTER_ACCEPT;
-                          }
-                          return NodeFilter.FILTER_REJECT;
-                        }
-                      });
-                      const nodes = [];
-                      let n;
-                      while ((n = walker.nextNode())) nodes.push(n);
-                      for (const textNode of nodes) {
-                        const text = textNode.textContent;
-                        const lower = text.toLowerCase();
-                        const klower = keyword.toLowerCase();
-                        const idx = lower.indexOf(klower);
-                        if (idx === -1) continue;
-                        const before = text.substring(0, idx);
-                        const match = text.substring(idx, idx + keyword.length);
-                        const after = text.substring(idx + keyword.length);
-                        const frag = document.createDocumentFragment();
-                        frag.appendChild(document.createTextNode(before));
-                        const span = document.createElement('span');
-                        span.setAttribute('style', 'background: #FFFF00; color: #000000; padding: 0 2px; font-weight: 600;');
-                        span.textContent = match;
-                        frag.appendChild(span);
-                        frag.appendChild(document.createTextNode(after));
-                        textNode.parentNode.replaceChild(frag, textNode);
-                      }
+                    const lower = text.toLowerCase();
+                    const klower = keyword.toLowerCase();
+                    const idx = lower.indexOf(klower);
+                    if (idx !== -1) {
+                      // Highlight the keyword in this question
+                      const before = text.substring(0, idx);
+                      const match = text.substring(idx, idx + keyword.length);
+                      const after = text.substring(idx + keyword.length);
+
+                      q.innerHTML = '';
+                      q.appendChild(document.createTextNode(before));
+                      const span = document.createElement('span');
+                      span.setAttribute('style', 'background: #FFFF00; color: #000000; padding: 0 2px; font-weight: 600;');
+                      span.textContent = match;
+                      q.appendChild(span);
+                      q.appendChild(document.createTextNode(after));
+
                       highlighted = true;
+                      highlightInfo = { question: text.substring(0, 100), questionCount: questionElements.length };
                       break;
                     }
                   }
-                  
-                  return { found: true, count: questions.length, highlighted };
+
+                  return {
+                    found: true,
+                    paaHeaderFound: !!paaHeader,
+                    questionCount: questionElements.length,
+                    highlighted: highlighted,
+                    highlightInfo: highlightInfo,
+                    sampleQuestions: questionElements.slice(0, 5).map(q => (q.textContent || '').trim().substring(0, 80))
+                  };
                 }, query);
-                console.log('PAA section:', JSON.stringify(paaFound));
-                
-                // Scroll to the PAA section so it's in view
+                console.log('PAA result:', JSON.stringify(paaResult));
+
+                // Scroll the highlighted keyword into view
                 await page.evaluate(() => {
-                  // Find the PAA section and scroll to it
-                  const paaHeader = Array.from(document.querySelectorAll('#b_results *')).find(
-                    el => el.children.length === 0 && el.textContent && el.textContent.includes('People also ask')
-                  );
-                  if (paaHeader) {
-                    paaHeader.scrollIntoView({ block: 'center' });
+                  const span = document.querySelector('span[style*=FFFF00], span[style*=background]');
+                  if (span) {
+                    span.scrollIntoView({ block: 'center' });
                   }
                 });
                 await page.waitForTimeout(1000);
-                
+
                 // Find the highlight span position
                 const paaPositioning = await page.evaluate(() => {
-                  const span = document.querySelector('span[style*="FFFF00"], span[style*="background"]');
+                  const span = document.querySelector('span[style*=FFFF00], span[style*=background]');
                   if (!span) return null;
                   const rect = span.getBoundingClientRect();
                   return {
@@ -289,14 +312,14 @@ jobs:
                   };
                 });
                 console.log('PAA keyword position:', JSON.stringify(paaPositioning));
-                
+
                 // Take full screenshot (server will crop to center)
                 const paaFullBuffer = await page.screenshot({ type: 'png', fullPage: false });
                 const paaFullBase64 = paaFullBuffer.toString('base64');
                 console.log('PAA screenshot size:', paaFullBuffer.length, 'bytes');
-                
+
                 await browser.close();
-                
+
                 await fetch(callbackUrl, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
