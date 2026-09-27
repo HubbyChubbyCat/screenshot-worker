@@ -124,6 +124,21 @@ jobs:
               });
               console.log('Found ' + articleUrls.length + ' articles from Bing');
               
+              // Debug: dump page info
+              const debugInfo = await searchPage.evaluate(() => {
+                const allLinks = document.querySelectorAll('#b_results a');
+                const linkInfo = Array.from(allLinks).slice(0, 10).map(a => ({
+                  href: a.href ? a.href.substring(0, 80) : '',
+                  text: (a.textContent || '').trim().substring(0, 60)
+                }));
+                const b_algoCount = document.querySelectorAll('#b_results li.b_algo').length;
+                const h2Count = document.querySelectorAll('#b_results h2').length;
+                const h2aCount = document.querySelectorAll('#b_results h2 a').length;
+                const bodyTextLen = (document.body.textContent || '').length;
+                return { b_algoCount, h2Count, h2aCount, bodyTextLen, linkInfo };
+              });
+              console.log('Debug:', JSON.stringify(debugInfo).substring(0, 2000));
+              
               // Filter to approved domains only
               const approved = articleUrls.filter(a => isApproved(a.url)).slice(0, maxArticles);
               console.log('Approved articles: ' + approved.length);
