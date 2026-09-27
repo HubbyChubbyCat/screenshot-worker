@@ -238,12 +238,11 @@ jobs:
                 // On Bing, the PAA section appears around 200-400px from the top
                 // of the results area, which is about 250-450px from the page top.
                 // We set the keyword position to the center of this area.
-                const paaPositioning = {
-                  kx: 350,   // Center of the results column (approx 30% of 1280)
-                  ky: 180,   // PAA section center (approx 200-400px range)
-                  kw: 200,
-                  kh: 40,
-                };
+                // Don't crop — send the full viewport screenshot.
+                // The PAA section position is unpredictable, so we send
+                // the full screenshot without keyword position.
+                // The server will use it as-is.
+                const paaPositioning = null;
                 
                 // Also try to find the actual result count for debugging
                 const _paaDebug = await page.evaluate((keyword) => {
