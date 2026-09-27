@@ -298,31 +298,30 @@ jobs:
                 }, query);
                 console.log('PAA result:', JSON.stringify(paaResult));
                 
-                // Debug: dump HTML structure to find PAA section
-                const htmlInfo = await page.evaluate(() => {
-                  // Get all elements with text content
+                // Debug: find ALL text containing ? on the page
+                const allQuestionTexts = await page.evaluate(() => {
+                  const results = [];
                   const all = document.querySelectorAll('*');
-                  const classes = new Set();
-                  const texts = [];
                   for (const el of all) {
-                    if (el.children.length === 0) {
-                      const text = (el.textContent || '').trim();
-                      if (text.length > 5 && text.length < 200) {
-                        texts.push({ tag: el.tagName, class: el.className.substring(0, 50), text: text.substring(0, 100) });
-                      }
-                    }
-                    if (el.className && typeof el.className === 'string') {
-                      el.className.split(' ').forEach(c => { if (c) classes.add(c); });
+                    // Check the element own text (not children)
+                    const ownText = Array.from(el.childNodes)
+                      .filter(n => n.nodeType === 3)
+                      .map(n => n.textContent.trim())
+                      .join(' ');
+                    if (ownText.includes('?') && ownText.length > 10 && ownText.length < 200) {
+                      results.push({
+                        tag: el.tagName,
+                        class: (el.className || '').toString().substring(0, 60),
+                        id: el.id || '',
+                        text: ownText.substring(0, 120),
+                        parentClass: (el.parentElement?.className || '').toString().substring(0, 60),
+                        parentTag: el.parentElement?.tagName || ''
+                      });
                     }
                   }
-                  return {
-                    totalElements: all.length,
-                    textsFound: texts.length,
-                    sampleTexts: texts.slice(0, 20),
-                    paaClasses: Array.from(classes).filter(c => c.includes('paa') || c.includes('ask') || c.includes('question') || c.includes('related') || c.includes('ans') || c.includes('prom')).slice(0, 20)
-                  };
+                  return results;
                 });
-                console.log('HTML info:', JSON.stringify(htmlInfo).substring(0, 3000));
+                console.log('All question texts:', JSON.stringify(allQuestionTexts).substring(0, 4000));
 
                 // Scroll the highlighted keyword into view
                 await page.evaluate(() => {
