@@ -65,7 +65,7 @@ jobs:
               const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
               const context = await browser.newContext({
                 viewport: { width: aspectW, height: aspectH },
-                deviceScaleFactor: 1,
+                deviceScaleFactor: 2,
                 locale: 'en-US',
                 userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
                 extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' }
@@ -158,16 +158,17 @@ jobs:
               }, { keyword: query, css: highlightCSS });
               await page.waitForTimeout(300);
               
-              // Strategy: Use CSS transform: scale() to zoom in on the keyword.
-              // This is more reliable than clip because it doesn't depend on
-              // viewport resize behavior.
+              // Scroll to top
+              await page.evaluate(() => window.scrollTo(0, 0));
+              await page.waitForTimeout(300);
+              
+              // Strategy: Use page.screenshot({ clip }) to capture a sub-region
+              // of the page centered on the keyword. This is the most reliable
+              // approach because clip captures raw page pixels — no CSS transform
+              // math required.
               //
-              // The reference image has the keyword at ~50% vertical, ~24% horizontal,
-              // and only ~1.5 results visible (zoomed in ~2.5x).
-              //
-              // We use transform: scale() on the #b_content element (which contains
-              // the results) with a transform-origin that places the keyword at the
-              // target position.
+              // The keyword will be at (targetX, targetY) in the output image
+              // because we offset the clip origin by exactly the right amount.
               
               const positioning = await page.evaluate(() => {
                 const span = document.querySelector('span[style*="FFFF00"], span[style*="background"]');
@@ -176,76 +177,71 @@ jobs:
                 return {
                   kx: rect.left + rect.width / 2,
                   ky: rect.top + rect.height / 2,
-                  vw: window.innerWidth,
-                  vh: window.innerHeight,
                 };
               });
               console.log('Keyword position:', JSON.stringify(positioning));
               
               if (positioning) {
-                // We want the keyword to appear at (targetX * vw, targetY * vh)
-                // after scaling by `scale` with transform-origin (ox, oy).
+                // We want the final image to be aspectW × aspectH (e.g. 1280×720).
+                // We'll capture a clip of size (aspectW / zoom) × (aspectH / zoom)
+                // centered so the keyword is at (targetX, targetY) in the output.
                 //
-                // After transform: a point at (x, y) goes to:
-                //   screenX = ox + (x - ox) * scale
-                // We want screenX = targetX * vw when x = kx:
-                //   targetX * vw = ox + (kx - ox) * scale
-                //   targetX * vw = ox * (1 - scale) + kx * scale
-                //   ox = (targetX * vw - kx * scale) / (1 - scale)
-                //   ox = (kx * scale - targetX * vw) / (scale - 1)
+                // The clip captures actual page pixels, so:
+                //   clip.x = kx - targetX * clipW
+                //   clip.y = ky - targetY * clipH
+                //   clip.width = clipW
+                //   clip.height = clipH
+                //
+                // The output image will be clipW × clipH pixels.
+                // To get a higher-resolution output, we use deviceScaleFactor=2
+                // (already set in the context), which doubles the clip dimensions
+                // in the actual screenshot pixels.
                 
-                const scale = 2.5;
+                const zoom = 2.5;
                 const targetX = 0.24;  // keyword at 24% from left
                 const targetY = 0.50;  // keyword at 50% from top (center)
                 
-                const ox = (positioning.kx * scale - targetX * positioning.vw) / (scale - 1);
-                const oy = (positioning.ky * scale - targetY * positioning.vh) / (scale - 1);
+                const clipW = aspectW / zoom;   // 1280/2.5 = 512
+                const clipH = aspectH / zoom;   // 720/2.5 = 288
                 
-                console.log('Transform: scale=' + scale + ' origin=(' + ox + ', ' + oy + ')');
-                console.log('Keyword at: (' + positioning.kx + ', ' + positioning.ky + ')');
-                console.log('Target screen: (' + (targetX * positioning.vw) + ', ' + (targetY * positioning.vh) + ')');
+                const clipX = positioning.kx - targetX * clipW;
+                const clipY = positioning.ky - targetY * clipH;
                 
-                // Apply the transform to the body element.
-                // We use body (not html) because body is the visible content container.
-                // We also need to set transform-origin in the correct units.
-                await page.evaluate(({ ox, oy, scale, targetX, targetY, vw, vh }) => {
-                  // Hide overflow on html to prevent scrollbars
-                  document.documentElement.style.overflow = 'hidden';
-                  
-                  // Apply transform to body
-                  document.body.style.transform = 'scale(' + scale + ')';
-                  document.body.style.transformOrigin = ox + 'px ' + oy + 'px';
-                  document.body.style.position = 'fixed';
-                  document.body.style.left = '0';
-                  document.body.style.top = '0';
-                  document.body.style.width = (100 / scale) + '%';
-                  
-                  // After the transform, verify the keyword position and adjust
-                  // with margin if needed
-                  setTimeout(() => {
-                    const span = document.querySelector('span[style*="FFFF00"], span[style*="background"]');
-                    if (span) {
-                      const rect = span.getBoundingClientRect();
-                      const currentX = rect.left + rect.width / 2;
-                      const targetScreenX = targetX * vw;
-                      const deltaX = targetScreenX - currentX;
-                      if (Math.abs(deltaX) > 5) {
-                        document.body.style.marginLeft = (parseFloat(document.body.style.marginLeft || '0') + deltaX) + 'px';
-                      }
-                      const currentY = rect.top + rect.height / 2;
-                      const targetScreenY = targetY * vh;
-                      const deltaY = targetScreenY - currentY;
-                      if (Math.abs(deltaY) > 5) {
-                        document.body.style.marginTop = (parseFloat(document.body.style.marginTop || '0') + deltaY) + 'px';
-                      }
-                    }
-                  }, 100);
-                }, { ox, oy, scale, targetX, targetY, vw: positioning.vw, vh: positioning.vh });
+                console.log('Clip:', { x: clipX, y: clipY, w: clipW, h: clipH });
                 
-                await page.waitForTimeout(800);
+                // Take screenshot with clip
+                const screenshotBuffer = await page.screenshot({
+                  type: 'png',
+                  clip: {
+                    x: clipX,
+                    y: clipY,
+                    width: clipW,
+                    height: clipH,
+                  },
+                });
+                
+                const screenshotBase64 = screenshotBuffer.toString('base64');
+                console.log('Screenshot size:', screenshotBuffer.length, 'bytes');
+                
+                await browser.close();
+                
+                await fetch(callbackUrl, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    searchId: searchId,
+                    success: true,
+                    query: query,
+                    frameType: frameType,
+                    screenshot: screenshotBase64,
+                    titles: titles
+                  })
+                });
+                console.log('Callback sent with screenshot');
+                return;
               }
               
-              // Take the screenshot
+              // Fallback: full page screenshot if positioning failed
               const screenshotBuffer = await page.screenshot({ type: 'png' });
               const screenshotBase64 = screenshotBuffer.toString('base64');
               console.log('Screenshot size:', screenshotBuffer.length, 'bytes');
