@@ -237,7 +237,7 @@ jobs:
                 // Find the PAA section position. The PAA section is between
                 // the result count and the first organic result. We find both
                 // positions and use the midpoint as the crop center.
-                // The keyword "Elon Musk" appears naturally in the PAA questions.
+                // The keyword Elon Musk appears naturally in the PAA questions.
                 const paaPositioning = await page.evaluate((keyword) => {
                   // Find the result count element (About X results)
                   const allElements = document.querySelectorAll('#b_results *');
