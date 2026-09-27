@@ -239,8 +239,8 @@ jobs:
                 // of the results area, which is about 250-450px from the page top.
                 // We set the keyword position to the center of this area.
                 const paaPositioning = {
-                  kx: 400,   // Center of the results column (approx 30% of 1280)
-                  ky: 300,   // PAA section center (approx 200-400px range)
+                  kx: 350,   // Center of the results column (approx 30% of 1280)
+                  ky: 180,   // PAA section center (approx 200-400px range)
                   kw: 200,
                   kh: 40,
                 };
