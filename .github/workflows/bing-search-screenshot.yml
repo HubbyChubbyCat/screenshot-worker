@@ -196,6 +196,129 @@ jobs:
                 return;
               }
               
+              // For People Also Ask frame: find the PAA section, highlight the
+              // keyword in one of the questions, take a screenshot.
+              if (frameType === 'people-also-ask') {
+                // Find the People Also Ask section
+                // Bing uses .b_algoBottomAnomaly, .b_ans, or #b_results .df_top
+                // The PAA questions are in .b_algoBottomAnomaly .b_promtxt or
+                // .b_ans .b_promtxt or similar selectors
+                const paaFound = await page.evaluate((keyword) => {
+                  // Try multiple selectors for PAA questions
+                  let questions = document.querySelectorAll('.b_algoBottomAnomaly .b_promtxt, .b_ans .b_promtxt, .b_entity .b_promtxt, [data-tag*=RelatedSearches] .b_promtxt');
+                  if (questions.length === 0) {
+                    // Fallback: look for any element containing People also ask
+                    const allElements = document.querySelectorAll('#b_results *');
+                    for (const el of allElements) {
+                      if (el.children.length === 0 && el.textContent && el.textContent.includes('People also ask')) {
+                        // Found the PAA header, now find questions below it
+                        questions = el.parentElement.parentElement.querySelectorAll('.b_promtxt, .b_algoBottomAnomaly a, .df_top');
+                        break;
+                      }
+                    }
+                  }
+                  
+                  if (questions.length === 0) return { found: false, count: 0 };
+                  
+                  // Find the first question that contains the keyword
+                  let highlighted = false;
+                  for (const q of questions) {
+                    const text = q.textContent || '';
+                    if (text.toLowerCase().includes(keyword.toLowerCase())) {
+                      // Wrap the keyword in a highlight span
+                      const walker = document.createTreeWalker(q, NodeFilter.SHOW_TEXT, {
+                        acceptNode(node) {
+                          if (node.textContent && node.textContent.toLowerCase().includes(keyword.toLowerCase())) {
+                            return NodeFilter.FILTER_ACCEPT;
+                          }
+                          return NodeFilter.FILTER_REJECT;
+                        }
+                      });
+                      const nodes = [];
+                      let n;
+                      while ((n = walker.nextNode())) nodes.push(n);
+                      const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                      const re = new RegExp('(' + escaped + ')', 'gi');
+                      for (const textNode of nodes) {
+                        const text = textNode.textContent;
+                        const parts = text.split(re);
+                        if (parts.length <= 1) continue;
+                        const frag = document.createDocumentFragment();
+                        for (const part of parts) {
+                          if (re.test(part)) {
+                            const span = document.createElement('span');
+                            span.setAttribute('style', 'background: #FFFF00; color: #000000; padding: 0 2px; font-weight: 600;');
+                            span.textContent = part;
+                            frag.appendChild(span);
+                          } else {
+                            frag.appendChild(document.createTextNode(part));
+                          }
+                        }
+                        textNode.parentNode.replaceChild(frag, textNode);
+                      }
+                      highlighted = true;
+                      break;
+                    }
+                  }
+                  
+                  return { found: true, count: questions.length, highlighted };
+                }, query);
+                console.log('PAA section:', JSON.stringify(paaFound));
+                
+                // Scroll to the PAA section so it's in view
+                await page.evaluate(() => {
+                  // Find the PAA section and scroll to it
+                  const paaHeader = Array.from(document.querySelectorAll('#b_results *')).find(
+                    el => el.children.length === 0 && el.textContent && el.textContent.includes('People also ask')
+                  );
+                  if (paaHeader) {
+                    paaHeader.scrollIntoView({ block: 'center' });
+                  }
+                });
+                await page.waitForTimeout(1000);
+                
+                // Find the highlight span position
+                const paaPositioning = await page.evaluate(() => {
+                  const span = document.querySelector('span[style*="FFFF00"], span[style*="background"]');
+                  if (!span) return null;
+                  const rect = span.getBoundingClientRect();
+                  return {
+                    kx: rect.left + rect.width / 2,
+                    ky: rect.top + rect.height / 2,
+                    kw: rect.width,
+                    kh: rect.height,
+                  };
+                });
+                console.log('PAA keyword position:', JSON.stringify(paaPositioning));
+                
+                // Take full screenshot (server will crop to center)
+                const paaFullBuffer = await page.screenshot({ type: 'png', fullPage: false });
+                const paaFullBase64 = paaFullBuffer.toString('base64');
+                console.log('PAA screenshot size:', paaFullBuffer.length, 'bytes');
+                
+                await browser.close();
+                
+                await fetch(callbackUrl, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    searchId: searchId,
+                    success: true,
+                    query: query,
+                    frameType: frameType,
+                    screenshot: paaFullBase64,
+                    titles: ['People also ask - ' + query],
+                    keywordX: paaPositioning ? paaPositioning.kx : 0,
+                    keywordY: paaPositioning ? paaPositioning.ky : 0,
+                    keywordW: paaPositioning ? paaPositioning.kw : 0,
+                    keywordH: paaPositioning ? paaPositioning.kh : 0,
+                    deviceScaleFactor: 2,
+                  })
+                });
+                console.log('Callback sent with PAA screenshot');
+                return;
+              }
+              
               // Log the first few result titles for debugging
               const titles = await page.evaluate(() => {
                 const links = document.querySelectorAll('#b_results li.b_algo h2 a, .b_algo h2 a');
