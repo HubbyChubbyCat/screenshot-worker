@@ -237,23 +237,22 @@ jobs:
                       const nodes = [];
                       let n;
                       while ((n = walker.nextNode())) nodes.push(n);
-                      const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                      const re = new RegExp('(' + escaped + ')', 'gi');
                       for (const textNode of nodes) {
                         const text = textNode.textContent;
-                        const parts = text.split(re);
-                        if (parts.length <= 1) continue;
+                        const lower = text.toLowerCase();
+                        const klower = keyword.toLowerCase();
+                        const idx = lower.indexOf(klower);
+                        if (idx === -1) continue;
+                        const before = text.substring(0, idx);
+                        const match = text.substring(idx, idx + keyword.length);
+                        const after = text.substring(idx + keyword.length);
                         const frag = document.createDocumentFragment();
-                        for (const part of parts) {
-                          if (re.test(part)) {
-                            const span = document.createElement('span');
-                            span.setAttribute('style', 'background: #FFFF00; color: #000000; padding: 0 2px; font-weight: 600;');
-                            span.textContent = part;
-                            frag.appendChild(span);
-                          } else {
-                            frag.appendChild(document.createTextNode(part));
-                          }
-                        }
+                        frag.appendChild(document.createTextNode(before));
+                        const span = document.createElement('span');
+                        span.setAttribute('style', 'background: #FFFF00; color: #000000; padding: 0 2px; font-weight: 600;');
+                        span.textContent = match;
+                        frag.appendChild(span);
+                        frag.appendChild(document.createTextNode(after));
                         textNode.parentNode.replaceChild(frag, textNode);
                       }
                       highlighted = true;
