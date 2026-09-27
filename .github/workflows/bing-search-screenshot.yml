@@ -298,40 +298,42 @@ jobs:
                 }, query);
                 console.log('PAA result:', JSON.stringify(paaResult));
                 
-                // Debug: check iframes and shadow DOM
-                const debugInfo = await page.evaluate(() => {
-                  const iframes = document.querySelectorAll('iframe');
-                  const iframeInfo = Array.from(iframes).map(f => ({
-                    src: f.src?.substring(0, 100) || '',
-                    id: f.id || '',
-                    class: f.className?.substring(0, 50) || '',
-                    width: f.width,
-                    height: f.height
-                  }));
+                // Debug: search for PAA questions in textContent
+                const debugInfo = await page.evaluate((keyword) => {
+                  const fullText = document.body.textContent || '';
                   
-                  // Check for shadow roots
-                  let shadowCount = 0;
-                  const allEls = document.querySelectorAll('*');
-                  for (const el of allEls) {
-                    if (el.shadowRoot) shadowCount++;
+                  // Find all occurrences of the keyword
+                  const keywordOccurrences = [];
+                  let idx = 0;
+                  while ((idx = fullText.toLowerCase().indexOf(keyword.toLowerCase(), idx)) !== -1) {
+                    const context = fullText.substring(Math.max(0, idx - 50), idx + keyword.length + 50);
+                    keywordOccurrences.push(context.replace(/\n/g, ' ').substring(0, 120));
+                    idx += keyword.length;
+                    if (keywordOccurrences.length >= 20) break;
                   }
                   
-                  // Get ALL text from the body using textContent (not innerText)
-                  const fullText = document.body.textContent || '';
-                  const questionMatches = fullText.match(/[^.!?]*\?/g) || [];
+                  // Find question-like patterns near the keyword
+                  const questionPatterns = ['How old', 'What is', 'Who is', 'Where', 'When', 'Does', 'How did', 'Why', 'What'];
+                  const foundQuestions = [];
+                  for (const pattern of questionPatterns) {
+                    let pi = fullText.indexOf(pattern);
+                    while (pi !== -1 && foundQuestions.length < 20) {
+                      const snippet = fullText.substring(pi, pi + 100).replace(/\n/g, ' ');
+                      if (snippet.includes('?')) {
+                        foundQuestions.push(snippet.substring(0, 100));
+                      }
+                      pi = fullText.indexOf(pattern, pi + 1);
+                    }
+                  }
                   
                   return {
-                    iframeCount: iframes.length,
-                    iframes: iframeInfo.slice(0, 5),
-                    shadowRootCount: shadowCount,
                     fullTextLength: fullText.length,
-                    questionsInTextContent: questionMatches.slice(0, 10),
-                    hasPeopleAlsoAsk: fullText.includes('People also ask'),
-                    hasRelatedQuestions: fullText.includes('Related questions'),
-                    hasAlsoAsk: fullText.toLowerCase().includes('also ask')
+                    keywordCount: keywordOccurrences.length,
+                    keywordContexts: keywordOccurrences,
+                    foundQuestions: foundQuestions
                   };
-                });
-                console.log('Debug info:', JSON.stringify(debugInfo).substring(0, 4000));
+                }, query);
+                console.log('Debug info:', JSON.stringify(debugInfo).substring(0, 5000));
 
                 // Scroll the highlighted keyword into view
                 await page.evaluate(() => {
