@@ -89,11 +89,10 @@ jobs:
                 extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' }
               });
               
-              // Step 1: Search Bing for the keyword restricted to approved domains
-              const siteQueries = domains.map(d => 'site:' + d).join(' OR ');
-              const searchQuery = keyword + ' (' + siteQueries + ')';
-              const searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(searchQuery) + '&setlang=en&cc=US';
-              console.log('Searching Bing:', searchUrl.substring(0, 200));
+              // Step 1: Search Bing for the keyword (no site: filter — too long)
+              // We filter results to approved domains afterwards
+              const searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(keyword) + '&setlang=en&cc=US';
+              console.log('Searching Bing for:', keyword);
               
               const searchPage = await context.newPage();
               await searchPage.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -111,7 +110,7 @@ jobs:
               // Extract article URLs from Bing results
               const articleUrls = await searchPage.evaluate(() => {
                 const results = [];
-                const links = document.querySelectorAll('#b_results li.b_algo h2 a, .b_algo h2 a');
+                const links = document.querySelectorAll('#b_results li.b_algo h2 a, .b_algo h2 a, .b_algo a');
                 for (const link of links) {
                   const href = link.href;
                   if (href && href.startsWith('http') && !href.includes('bing.com')) {
