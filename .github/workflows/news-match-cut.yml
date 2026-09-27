@@ -22,7 +22,7 @@ jobs:
       - name: Create capture script
         run: |
           cat > capture.js << 'CAPTURE_SCRIPT'
-                    const { chromium } = require('playwright');
+          const { chromium } = require('playwright');
           
           (async () => {
             const keyword = process.env.KEYWORD;
@@ -78,7 +78,7 @@ jobs:
               });
               
               // Search Bing
-              const searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(keyword) + '&setlang=en&cc=US';
+              const searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(keyword + ' news') + '&setlang=en&cc=US';
               console.log('Searching Bing for:', keyword);
               
               const searchPage = await context.newPage();
