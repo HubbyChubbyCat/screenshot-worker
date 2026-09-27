@@ -215,7 +215,7 @@ jobs:
                 // Find and highlight the keyword in PAA questions
                 const paaResult = await page.evaluate((keyword) => {
                   // Strategy 1: Find the People also ask header, then find questions below it
-                  const allElements = Array.from(document.querySelectorAll('#b_results *'));
+                  const allElements = Array.from(document.querySelectorAll('*'));
                   // Also check textContent since innerText may not work with Shadow DOM
                   let paaHeader = null;
                   for (const el of allElements) {
@@ -248,7 +248,7 @@ jobs:
 
                   // Strategy 3: Fallback - search all questions on the page
                   if (questionElements.length === 0) {
-                    questionElements = Array.from(document.querySelectorAll('#b_results *')).filter(el => {
+                    questionElements = Array.from(document.querySelectorAll('*')).filter(el => {
                       if (el.children.length > 0) return false;
                       const text = (el.textContent || '').trim();
                       return text.length > 10 && text.includes('?') && text.length < 200;
@@ -301,7 +301,7 @@ jobs:
                 // Debug: dump HTML structure to find PAA section
                 const htmlInfo = await page.evaluate(() => {
                   // Get all elements with text content
-                  const all = document.querySelectorAll('#b_results *');
+                  const all = document.querySelectorAll('*');
                   const classes = new Set();
                   const texts = [];
                   for (const el of all) {
