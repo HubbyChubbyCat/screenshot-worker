@@ -108,16 +108,51 @@ jobs:
               } catch {}
               
               // Extract article URLs from Bing results
+              // Bing wraps links in redirect URLs (bing.com/ck/a), so we need
+              // to extract the real URL from the cite element or data-href
               const articleUrls = await searchPage.evaluate(() => {
                 const results = [];
-                const links = document.querySelectorAll('#b_results li.b_algo h2 a, .b_algo h2 a, .b_algo a');
-                for (const link of links) {
-                  const href = link.href;
-                  if (href && href.startsWith('http') && !href.includes('bing.com')) {
-                    results.push({
-                      url: href,
-                      title: (link.textContent || '').trim()
-                    });
+                const items = document.querySelectorAll('#b_results li.b_algo');
+                for (const item of items) {
+                  const titleLink = item.querySelector('h2 a');
+                  if (!titleLink) continue;
+                  const title = (titleLink.textContent || '').trim();
+                  
+                  // Try to get the real URL from the cite element
+                  let realUrl = '';
+                  const cite = item.querySelector('cite');
+                  if (cite) {
+                    const citeText = (cite.textContent || '').trim();
+                    // Cite text is like "en.wikipedia.org > wiki > Elon_Musk"
+                    // Convert it to a URL
+                    const firstPart = citeText.split(' ')[0].split('>')[0].trim();
+                    if (firstPart) {
+                      // Check if it starts with http, otherwise prepend https://
+                      realUrl = firstPart.startsWith('http') ? firstPart : 'https://' + firstPart;
+                    }
+                  }
+                  
+                  // Also try data-href attribute (Bing sometimes stores the real URL there)
+                  if (!realUrl) {
+                    const dataHref = titleLink.getAttribute('data-href') || titleLink.getAttribute('href');
+                    if (dataHref && !dataHref.includes('bing.com/ck/')) {
+                      realUrl = dataHref;
+                    }
+                  }
+                  
+                  // Also try the .tilk element which has the actual link
+                  if (!realUrl) {
+                    const tilk = item.querySelector('a.tilk, a[data-href]');
+                    if (tilk) {
+                      const dh = tilk.getAttribute('data-href') || tilk.href;
+                      if (dh && !dh.includes('bing.com/ck/')) {
+                        realUrl = dh;
+                      }
+                    }
+                  }
+                  
+                  if (realUrl && realUrl.startsWith('http')) {
+                    results.push({ url: realUrl, title: title });
                   }
                 }
                 return results;
