@@ -85,7 +85,7 @@ jobs:
               
               console.log('Navigating to:', searchUrl);
               await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-              await page.waitForTimeout(5000);
+              await page.waitForTimeout(8000);
               
               // Dismiss cookie consent
               try {
@@ -322,7 +322,7 @@ jobs:
                 console.log('PAA keyword position:', JSON.stringify(paaPositioning));
 
                 // Take full screenshot (server will crop to center)
-                const paaFullBuffer = await page.screenshot({ type: 'png', fullPage: false });
+                const paaFullBuffer = await page.screenshot({ type: 'png', fullPage: true });
                 const paaFullBase64 = paaFullBuffer.toString('base64');
                 console.log('PAA screenshot size:', paaFullBuffer.length, 'bytes');
 
