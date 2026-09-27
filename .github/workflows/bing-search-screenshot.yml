@@ -96,7 +96,7 @@ jobs:
                 }
               } catch {}
               
-              // For Wikipedia frame: try to click the first Wikipedia result
+              // For Wikipedia frame: click the first Wikipedia result to open the article
               if (frameType === 'wikipedia') {
                 try {
                   const wikiLink = page.locator('a[href*=\"wikipedia.org\"]').first();
@@ -106,6 +106,80 @@ jobs:
                     await page.waitForTimeout(3000);
                   }
                 } catch {}
+                
+                // Now we're on the Wikipedia article page.
+                // Highlight the keyword in the H1 heading (the article title).
+                await page.evaluate(({ keyword, css }) => {
+                  // Wikipedia's article title is in #firstHeading or h1
+                  const h1 = document.querySelector('#firstHeading') || document.querySelector('h1');
+                  if (!h1) return;
+                  
+                  const text = h1.textContent || '';
+                  const idx = text.toLowerCase().indexOf(keyword.toLowerCase());
+                  if (idx === -1) return;
+                  
+                  const before = text.substring(0, idx);
+                  const match = text.substring(idx, idx + keyword.length);
+                  const after = text.substring(idx + keyword.length);
+                  
+                  h1.innerHTML = '';
+                  h1.appendChild(document.createTextNode(before));
+                  const span = document.createElement('span');
+                  span.setAttribute('style', css);
+                  span.textContent = match;
+                  h1.appendChild(span);
+                  h1.appendChild(document.createTextNode(after));
+                }, { keyword: query, css: highlightCSS });
+                await page.waitForTimeout(300);
+                
+                // Log the page title for debugging
+                const pageTitle = await page.evaluate(() => document.querySelector('#firstHeading, h1')?.textContent?.trim() || 'unknown');
+                console.log('Wikipedia page title:', pageTitle);
+                
+                // Scroll to top
+                await page.evaluate(() => window.scrollTo(0, 0));
+                await page.waitForTimeout(300);
+                
+                // Find the highlight span's position
+                const wikiPositioning = await page.evaluate(() => {
+                  const span = document.querySelector('#firstHeading span[style*=\"background\"], h1 span[style*=\"background\"]');
+                  if (!span) return null;
+                  const rect = span.getBoundingClientRect();
+                  return {
+                    kx: rect.left + rect.width / 2,
+                    ky: rect.top + rect.height / 2,
+                    kw: rect.width,
+                    kh: rect.height,
+                  };
+                });
+                console.log('Wikipedia keyword position:', JSON.stringify(wikiPositioning));
+                
+                // Take a full-page screenshot (server will crop to center the keyword)
+                const wikiFullBuffer = await page.screenshot({ type: 'png', fullPage: false });
+                const wikiFullBase64 = wikiFullBuffer.toString('base64');
+                console.log('Wikipedia screenshot size:', wikiFullBuffer.length, 'bytes');
+                
+                await browser.close();
+                
+                await fetch(callbackUrl, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    searchId: searchId,
+                    success: true,
+                    query: query,
+                    frameType: frameType,
+                    screenshot: wikiFullBase64,
+                    titles: [pageTitle],
+                    keywordX: wikiPositioning ? wikiPositioning.kx : 0,
+                    keywordY: wikiPositioning ? wikiPositioning.ky : 0,
+                    keywordW: wikiPositioning ? wikiPositioning.kw : 0,
+                    keywordH: wikiPositioning ? wikiPositioning.kh : 0,
+                    deviceScaleFactor: 2,
+                  })
+                });
+                console.log('Callback sent with Wikipedia screenshot');
+                return;
               }
               
               // Log the first few result titles for debugging
