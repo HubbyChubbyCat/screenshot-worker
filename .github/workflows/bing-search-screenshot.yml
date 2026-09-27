@@ -196,166 +196,94 @@ jobs:
                 return;
               }
               
-              // For People Also Ask frame: find the PAA section, highlight the
-              // keyword in one of the questions, take a screenshot.
+              // For People Also Ask frame: scroll to the PAA section and screenshot.
+              // The PAA section is rendered visually but its text is not in the DOM
+              // (likely loaded via JS into a canvas or custom rendering). So we
+              // can highlight via CSS text-search or just capture the section as-is.
+              // Strategy: scroll to the PAA section, then use the keyword position
+              // from the result count area (which is in the DOM) as a proxy.
               if (frameType === 'people-also-ask') {
-                // Wait for the page to fully render, then scroll to find PAA
+                // Wait for page to fully load
                 await page.waitForTimeout(3000);
-                
-                // Scroll down to load the PAA section
-                for (let scrollI = 0; scrollI < 5; scrollI++) {
-                  await page.evaluate(() => {
-                    window.scrollBy(0, 600);
-                  });
-                  await page.waitForTimeout(600);
-                }
-                await page.evaluate(() => window.scrollTo(0, 0));
-                await page.waitForTimeout(2000);
 
-                // Find and highlight the keyword in PAA questions
-                const paaResult = await page.evaluate((keyword) => {
-                  // Strategy 1: Find the People also ask header, then find questions below it
-                  const allElements = Array.from(document.querySelectorAll('*'));
-                  // Also check textContent since innerText may not work with Shadow DOM
-                  let paaHeader = null;
+                // Scroll to find the PAA section. The PAA section is typically
+                // between the result count and the first organic result.
+                // Try to find the result count element and scroll to it.
+                const paaScrollResult = await page.evaluate((keyword) => {
+                  // Find the About X results text
+                  const allElements = document.querySelectorAll('#b_results *');
+                  let resultsCountEl = null;
                   for (const el of allElements) {
                     if (el.children.length === 0) {
                       const text = (el.textContent || '').trim();
-                      if (text === 'People also ask' || text === 'People Also Ask' || 
-                      text === 'Related questions' || text === 'Related Searches' ||
-                      text === 'People also search for' || text.includes('also ask')) {
-                        paaHeader = el;
+                      if (text.match(/about\s+[\d,]+\s+(results|sites)/i)) {
+                        resultsCountEl = el;
                         break;
                       }
                     }
                   }
 
-                  // Strategy 2: If no header found, look for elements with b_promtxt class
-                  let questionElements = [];
-                  if (paaHeader) {
-                    // Walk up to find the container, then find all question-like elements
-                    let container = paaHeader;
-                    for (let i = 0; i < 5 && container.parentElement; i++) {
-                      container = container.parentElement;
-                    }
-                    // Find all text elements that look like questions (end with ?)
-                    questionElements = Array.from(container.querySelectorAll('*')).filter(el => {
-                      if (el.children.length > 0) return false;
-                      const text = (el.textContent || '').trim();
-                      return text.length > 10 && text.includes('?');
-                    });
+                  if (resultsCountEl) {
+                    // Scroll so the results count is near the top
+                    resultsCountEl.scrollIntoView({ block: 'start' });
+                    return { found: true, text: resultsCountEl.textContent.trim() };
                   }
-
-                  // Strategy 3: Fallback - search all questions on the page
-                  if (questionElements.length === 0) {
-                    questionElements = Array.from(document.querySelectorAll('*')).filter(el => {
-                      if (el.children.length > 0) return false;
-                      const text = (el.textContent || '').trim();
-                      return text.length > 10 && text.includes('?') && text.length < 200;
-                    });
-                  }
-
-                  if (questionElements.length === 0) {
-                    return { found: false, reason: 'No questions found', paaHeaderFound: !!paaHeader };
-                  }
-
-                  // Find the first question that contains the keyword
-                  let highlighted = false;
-                  let highlightInfo = null;
-                  for (const q of questionElements) {
-                    const text = q.textContent || '';
-                    const lower = text.toLowerCase();
-                    const klower = keyword.toLowerCase();
-                    const idx = lower.indexOf(klower);
-                    if (idx !== -1) {
-                      // Highlight the keyword in this question
-                      const before = text.substring(0, idx);
-                      const match = text.substring(idx, idx + keyword.length);
-                      const after = text.substring(idx + keyword.length);
-
-                      q.innerHTML = '';
-                      q.appendChild(document.createTextNode(before));
-                      const span = document.createElement('span');
-                      span.setAttribute('style', 'background: #FFFF00; color: #000000; padding: 0 2px; font-weight: 600;');
-                      span.textContent = match;
-                      q.appendChild(span);
-                      q.appendChild(document.createTextNode(after));
-
-                      highlighted = true;
-                      highlightInfo = { question: text.substring(0, 100), questionCount: questionElements.length };
-                      break;
-                    }
-                  }
-
-                  return {
-                    found: true,
-                    paaHeaderFound: !!paaHeader,
-                    questionCount: questionElements.length,
-                    highlighted: highlighted,
-                    highlightInfo: highlightInfo,
-                    sampleQuestions: questionElements.slice(0, 5).map(q => (q.textContent || '').trim().substring(0, 80))
-                  };
+                  return { found: false };
                 }, query);
-                console.log('PAA result:', JSON.stringify(paaResult));
+                console.log('PAA scroll result:', JSON.stringify(paaScrollResult));
+
+                await page.waitForTimeout(2000);
+
+                // Now try to find the keyword in the PAA area.
+                // Since PAA text is not in the DOM, we will try to highlight
+                // by injecting a CSS rule that uses background-color on
+                // elements containing the keyword text.
+                // Actually, let try a different approach: use the CSS
+                // ::target-text or find elements by visual position.
                 
-                // Debug: search for PAA questions in textContent
-                const debugInfo = await page.evaluate((keyword) => {
-                  const fullText = document.body.textContent || '';
-                  
-                  // Find all occurrences of the keyword
-                  const keywordOccurrences = [];
-                  let idx = 0;
-                  while ((idx = fullText.toLowerCase().indexOf(keyword.toLowerCase(), idx)) !== -1) {
-                    const context = fullText.substring(Math.max(0, idx - 50), idx + keyword.length + 50);
-                    keywordOccurrences.push(context.replace(/\n/g, ' ').substring(0, 120));
-                    idx += keyword.length;
-                    if (keywordOccurrences.length >= 20) break;
-                  }
-                  
-                  // Find question-like patterns near the keyword
-                  const questionPatterns = ['How old', 'What is', 'Who is', 'Where', 'When', 'Does', 'How did', 'Why', 'What'];
-                  const foundQuestions = [];
-                  for (const pattern of questionPatterns) {
-                    let pi = fullText.indexOf(pattern);
-                    while (pi !== -1 && foundQuestions.length < 20) {
-                      const snippet = fullText.substring(pi, pi + 100).replace(/\n/g, ' ');
-                      if (snippet.includes('?')) {
-                        foundQuestions.push(snippet.substring(0, 100));
+                // For now, just find the keyword in the visible search results
+                // (which ARE in the DOM) and use that position. The server
+                // will crop around it.
+                const paaPositioning = await page.evaluate((keyword) => {
+                  // Find the first occurrence of the keyword in the results
+                  const allElements = document.querySelectorAll('#b_results *');
+                  for (const el of allElements) {
+                    if (el.children.length === 0) {
+                      const text = (el.textContent || '').trim();
+                      if (text.toLowerCase().includes(keyword.toLowerCase()) && text.length < 200) {
+                        // Check if this element is in the PAA area (near the top of results)
+                        const rect = el.getBoundingClientRect();
+                        // The PAA section is typically in the top 400px of the results
+                        if (rect.top > 50 && rect.top < 500) {
+                          // Highlight this element
+                          const lower = text.toLowerCase();
+                          const klower = keyword.toLowerCase();
+                          const idx = lower.indexOf(klower);
+                          if (idx !== -1) {
+                            const before = text.substring(0, idx);
+                            const match = text.substring(idx, idx + keyword.length);
+                            const after = text.substring(idx + keyword.length);
+                            el.innerHTML = '';
+                            el.appendChild(document.createTextNode(before));
+                            const span = document.createElement('span');
+                            span.setAttribute('style', 'background: #FFFF00; color: #000000; padding: 0 2px; font-weight: 600;');
+                            span.textContent = match;
+                            el.appendChild(span);
+                            el.appendChild(document.createTextNode(after));
+
+                            return {
+                              kx: rect.left + rect.width / 2,
+                              ky: rect.top + rect.height / 2,
+                              kw: rect.width,
+                              kh: rect.height,
+                            };
+                          }
+                        }
                       }
-                      pi = fullText.indexOf(pattern, pi + 1);
                     }
                   }
-                  
-                  return {
-                    fullTextLength: fullText.length,
-                    keywordCount: keywordOccurrences.length,
-                    keywordContexts: keywordOccurrences,
-                    foundQuestions: foundQuestions
-                  };
+                  return null;
                 }, query);
-                console.log('Debug info:', JSON.stringify(debugInfo).substring(0, 5000));
-
-                // Scroll the highlighted keyword into view
-                await page.evaluate(() => {
-                  const span = document.querySelector('span[style*=FFFF00], span[style*=background]');
-                  if (span) {
-                    span.scrollIntoView({ block: 'center' });
-                  }
-                });
-                await page.waitForTimeout(1000);
-
-                // Find the highlight span position
-                const paaPositioning = await page.evaluate(() => {
-                  const span = document.querySelector('span[style*=FFFF00], span[style*=background]');
-                  if (!span) return null;
-                  const rect = span.getBoundingClientRect();
-                  return {
-                    kx: rect.left + rect.width / 2,
-                    ky: rect.top + rect.height / 2,
-                    kw: rect.width,
-                    kh: rect.height,
-                  };
-                });
                 console.log('PAA keyword position:', JSON.stringify(paaPositioning));
 
                 // Take full screenshot (server will crop to center)
