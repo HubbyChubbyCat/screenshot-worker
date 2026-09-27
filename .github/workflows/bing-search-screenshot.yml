@@ -162,6 +162,66 @@ jobs:
               await page.evaluate(() => window.scrollTo(0, 0));
               await page.waitForTimeout(300);
               
+              // Find the highlight span's position and zoom/center on it.
+              // The goal: the keyword should be at ~50% vertical, ~24% horizontal
+              // (matching the reference image), and zoomed in so only ~1.5 results
+              // are visible.
+              const positioning = await page.evaluate(() => {
+                const span = document.querySelector('span[style*="FFFF00"], span[style*="background"]');
+                if (!span) return null;
+                const rect = span.getBoundingClientRect();
+                // Also find the scope tabs rect to know where the top of content is
+                const scopebar = document.querySelector('.b_scopebar');
+                const scopeRect = scopebar ? scopebar.getBoundingClientRect() : { bottom: 0 };
+                return {
+                  keywordX: rect.left,
+                  keywordY: rect.top,
+                  keywordW: rect.width,
+                  keywordH: rect.height,
+                  keywordCenterX: rect.left + rect.width / 2,
+                  keywordCenterY: rect.top + rect.height / 2,
+                  scopeBottom: scopeRect.bottom,
+                  pageWidth: document.documentElement.scrollWidth,
+                  pageHeight: document.documentElement.scrollHeight,
+                };
+              });
+              console.log('Keyword position:', JSON.stringify(positioning));
+              
+              if (positioning) {
+                // We want to zoom in so that the keyword area fills the frame.
+                // Target: keyword at 50% vertical, 24% horizontal (like reference).
+                // 
+                // Strategy: use CSS transform: scale() on the body, with
+                // transform-origin set so the keyword lands at the target position.
+                //
+                // The scale factor: we want ~1.5 results visible (currently ~5).
+                // So scale ≈ 3x. But we also need the scope tabs visible at top.
+                // Let's use scale = 2.5 and adjust origin.
+                
+                const scale = 2.5;
+                const targetXPercent = 0.24; // keyword at 24% from left
+                const targetYPercent = 0.45; // keyword at 45% from top (slightly above center to leave room for tabs above)
+                
+                // After scaling by `scale`, the keyword's screen position will be:
+                //   screenX = (keywordCenterX - originX) * scale + originX
+                // We want screenX = targetXPercent * viewportWidth
+                // So: originX = (keywordCenterX * scale - targetX * viewportW) / (scale - 1)
+                const viewportW = aspectW;
+                const viewportH = aspectH;
+                const originX = (positioning.keywordCenterX * scale - targetXPercent * viewportW) / (scale - 1);
+                const originY = (positioning.keywordCenterY * scale - targetYPercent * viewportH) / (scale - 1);
+                
+                console.log('Scale:', scale, 'Origin:', originX, originY);
+                
+                await page.evaluate(({ originX, originY, scale }) => {
+                  document.body.style.transform = 'scale(' + scale + ')';
+                  document.body.style.transformOrigin = originX + 'px ' + originY + 'px';
+                  document.body.style.width = (100 / scale) + '%';
+                }, { originX, originY, scale });
+                
+                await page.waitForTimeout(500);
+              }
+              
               // Take the screenshot
               const screenshotBuffer = await page.screenshot({ type: 'png' });
               const screenshotBase64 = screenshotBuffer.toString('base64');
