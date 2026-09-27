@@ -341,8 +341,14 @@ jobs:
               // For Knowledge Panel frame: find the entity card on the right side
               // of the Bing results, highlight the keyword in its title, screenshot.
               if (frameType === 'knowledge-panel') {
-                // Wait for the entity card to load
-                await page.waitForTimeout(3000);
+                // Wait for the entity card to load — Bing loads it asynchronously
+                await page.waitForTimeout(8000);
+
+                // Scroll down to trigger lazy loading of the entity card
+                await page.evaluate(() => window.scrollBy(0, 300));
+                await page.waitForTimeout(2000);
+                await page.evaluate(() => window.scrollTo(0, 0));
+                await page.waitForTimeout(2000);
 
                 // Find the knowledge panel / entity card
                 // Bing uses #b_context, .b_entity, .b_card, or similar for the right sidebar
@@ -475,31 +481,37 @@ jobs:
                 }, query);
                 console.log('Knowledge panel result:', JSON.stringify(kpResult));
 
-                // Debug: dump the #b_context HTML structure
+                // Debug: check various containers for the knowledge panel
                 const kpDebug = await page.evaluate(() => {
-                  const panel = document.querySelector('#b_context');
-                  if (!panel) return { found: false };
-                  // Get all leaf elements with text
-                  const texts = [];
-                  panel.querySelectorAll('*').forEach(el => {
-                    if (el.children.length === 0) {
-                      const text = (el.textContent || '').trim();
-                      if (text.length > 2) {
-                        texts.push({
-                          tag: el.tagName,
-                          class: (el.className || '').toString().substring(0, 50),
-                          id: el.id || '',
-                          text: text.substring(0, 80)
-                        });
-                      }
+                  // Check multiple containers
+                  const containers = ['#b_context', '.b_canvas', '#b_results .b_ans', '#entcs', '.b_entity', '#b_pole'];
+                  const results = {};
+                  for (const sel of containers) {
+                    const el = document.querySelector(sel);
+                    if (el) {
+                      const rect = el.getBoundingClientRect();
+                      results[sel] = {
+                        found: true,
+                        childCount: el.children.length,
+                        innerHTMLLen: el.innerHTML.length,
+                        textLen: (el.textContent || '').trim().length,
+                        rect: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) }
+                      };
                     }
-                  });
-                  return {
-                    found: true,
-                    innerHTML: panel.innerHTML.substring(0, 500),
-                    childCount: panel.children.length,
-                    texts: texts.slice(0, 15)
-                  };
+                  }
+
+                  // Also search for elements with entity-related classes
+                  const entityEls = document.querySelectorAll('[class*=entity], [class*=Entity], [class*=factrow], [class*=b_card]');
+                  results.entityClassCount = entityEls.length;
+                  if (entityEls.length > 0) {
+                    results.entitySample = Array.from(entityEls).slice(0, 3).map(el => ({
+                      tag: el.tagName,
+                      class: el.className.substring(0, 60),
+                      text: (el.textContent || '').trim().substring(0, 80)
+                    }));
+                  }
+
+                  return results;
                 });
                 console.log('KP debug:', JSON.stringify(kpDebug).substring(0, 3000));
 
