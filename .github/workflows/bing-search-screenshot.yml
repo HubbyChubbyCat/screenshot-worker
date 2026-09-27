@@ -199,13 +199,15 @@ jobs:
               // For People Also Ask frame: find the PAA section, highlight the
               // keyword in one of the questions, take a screenshot.
               if (frameType === 'people-also-ask') {
-                // Scroll down to load the PAA section (it is usually below the fold)
-                await page.evaluate(() => {
-                  window.scrollTo(0, document.body.scrollHeight);
-                });
-                await page.waitForTimeout(2000);
+                // Scroll down multiple times to load the PAA section
+                for (let scrollI = 0; scrollI < 5; scrollI++) {
+                  await page.evaluate(() => {
+                    window.scrollBy(0, 600);
+                  });
+                  await page.waitForTimeout(800);
+                }
                 await page.evaluate(() => window.scrollTo(0, 0));
-                await page.waitForTimeout(1000);
+                await page.waitForTimeout(1500);
 
                 // Find and highlight the keyword in PAA questions
                 const paaResult = await page.evaluate((keyword) => {
@@ -215,7 +217,9 @@ jobs:
                   for (const el of allElements) {
                     if (el.children.length === 0) {
                       const text = (el.textContent || '').trim();
-                      if (text === 'People also ask' || text === 'People Also Ask') {
+                      if (text === 'People also ask' || text === 'People Also Ask' || 
+                      text === 'Related questions' || text === 'Related Searches' ||
+                      text === 'People also search for' || text.includes('also ask')) {
                         paaHeader = el;
                         break;
                       }
@@ -289,6 +293,10 @@ jobs:
                   };
                 }, query);
                 console.log('PAA result:', JSON.stringify(paaResult));
+                
+                // Debug: dump page text to find what sections exist
+                const pageText = await page.evaluate(() => document.body.innerText.substring(0, 3000));
+                console.log('Page text (first 3000 chars):', pageText);
 
                 // Scroll the highlighted keyword into view
                 await page.evaluate(() => {
