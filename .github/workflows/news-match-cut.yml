@@ -78,7 +78,7 @@ jobs:
               });
               
               // Search Bing
-              const searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(keyword + ' news') + '&setlang=en&cc=US';
+              const searchUrl = 'https://www.bing.com/news/search?q=' + encodeURIComponent(keyword) + '&setlang=en&cc=US';
               console.log('Searching Bing for:', keyword);
               
               const searchPage = await context.newPage();
@@ -94,28 +94,50 @@ jobs:
                 }
               } catch {}
               
-              // Extract article URLs - handle Bing redirect links
+              // Extract article URLs from Bing News results
               const articleUrls = await searchPage.evaluate(() => {
                 const results = [];
-                const items = document.querySelectorAll('#b_results li.b_algo');
+                // Bing News uses different selectors: .news-card, .t_t, etc.
+                const items = document.querySelectorAll('.news-card, .t_item, #b_results li.b_algo, li.b_ans');
                 for (const item of items) {
-                  const titleLink = item.querySelector('h2 a');
+                  const titleLink = item.querySelector('a.title, .title a, h2 a, a.newscard');
                   if (!titleLink) continue;
                   const title = (titleLink.textContent || '').trim();
                   
-                  // Get real URL from cite element
-                  let realUrl = '';
-                  const cite = item.querySelector('cite');
-                  if (cite) {
-                    const citeText = (cite.textContent || '').trim();
-                    const firstPart = citeText.split(' ')[0].split('>')[0].trim();
-                    if (firstPart) {
-                      realUrl = firstPart.startsWith('http') ? firstPart : 'https://' + firstPart;
+                  // Get URL from the link itself or from cite
+                  let realUrl = titleLink.href || '';
+                  if (!realUrl || realUrl.includes('bing.com/ck/')) {
+                    const cite = item.querySelector('cite, .source');
+                    if (cite) {
+                      const citeText = (cite.textContent || '').trim();
+                      const firstPart = citeText.split(' ')[0].split('>')[0].trim();
+                      if (firstPart) {
+                        realUrl = firstPart.startsWith('http') ? firstPart : 'https://' + firstPart;
+                      }
                     }
                   }
                   
-                  if (realUrl && realUrl.startsWith('http')) {
+                  // Also check data-url attribute
+                  if (!realUrl || realUrl.includes('bing.com')) {
+                    const dataUrl = item.getAttribute('data-url') || titleLink.getAttribute('data-url');
+                    if (dataUrl) realUrl = dataUrl;
+                  }
+                  
+                  if (realUrl && realUrl.startsWith('http') && !realUrl.includes('bing.com')) {
                     results.push({ url: realUrl, title: title });
+                  }
+                }
+                // Also try all links on the page
+                if (results.length === 0) {
+                  const allLinks = document.querySelectorAll('a[href]');
+                  for (const link of allLinks) {
+                    const href = link.href;
+                    if (href && href.startsWith('http') && !href.includes('bing.com') && !href.includes('microsoft.com')) {
+                      const text = (link.textContent || '').trim();
+                      if (text.length > 20 && text.includes(keyword.substring(0, 3))) {
+                        results.push({ url: href, title: text });
+                      }
+                    }
                   }
                 }
                 return results;
