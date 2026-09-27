@@ -80,6 +80,8 @@ jobs:
                 searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(query + ' Wikipedia') + '&setlang=en&cc=US';
               } else if (frameType === 'knowledge-panel') {
                 searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(query) + '&setlang=en&cc=US';
+              } else if (frameType === 'bing-ai-overview') {
+                searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(query) + '&form=AIOTEX&setlang=en&cc=US';
               } else {
                 // bing-results (default)
                 searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(query) + '&setlang=en&cc=US';
@@ -563,6 +565,161 @@ jobs:
                   })
                 });
                 console.log('Callback sent with KP screenshot');
+                return;
+              }
+
+              // For Bing AI Overview frame: find the AI-generated summary box,
+              // highlight the keyword, screenshot.
+              if (frameType === 'bing-ai-overview') {
+                // Wait for the AI overview to load — it takes longer than regular results
+                await page.waitForTimeout(5000);
+
+                // Try clicking the AI Mode tab if the overview didn't load
+                try {
+                  const aiTab = page.locator('a:has-text("AI Mode"), .b_scopebar a[href*="AI"], [aria-label*=AI]').first();
+                  if (await aiTab.isVisible({ timeout: 2000 })) {
+                    await aiTab.click();
+                    await page.waitForTimeout(5000);
+                  }
+                } catch {}
+
+                // Find the AI overview box and highlight the keyword
+                const aiResult = await page.evaluate((keyword) => {
+                  // The AI overview is typically in .b_algoBottomAnomaly, .b_ans,
+                  // or a container with AI-related classes
+                  const selectors = [
+                    '.b_algoBottomAnomaly',
+                    '.b_ans',
+                    '#b_results > li.b_ans',
+                    '[class*=aiOverview]',
+                    '[class*=AIOverview]',
+                    '.b_canvas',
+                    '#aiOverview',
+                    '.b_top',
+                  ];
+
+                  let container = null;
+                  let usedSelector = '';
+                  for (const sel of selectors) {
+                    container = document.querySelector(sel);
+                    if (container && container.textContent && container.textContent.trim().length > 50) {
+                      usedSelector = sel;
+                      break;
+                    }
+                    container = null;
+                  }
+
+                  if (!container) {
+                    // Fallback: find the first element in #b_results that has
+                    // substantial text (the AI overview is usually the first big block)
+                    const results = document.querySelectorAll('#b_results > li');
+                    for (const li of results) {
+                      const text = (li.textContent || '').trim();
+                      if (text.length > 200 && text.toLowerCase().includes(keyword.toLowerCase())) {
+                        container = li;
+                        usedSelector = 'first-result-li';
+                        break;
+                      }
+                    }
+                  }
+
+                  if (!container) {
+                    return { found: false, reason: 'No AI overview found' };
+                  }
+
+                  // Find the first text element containing the keyword
+                  const allEls = container.querySelectorAll('*');
+                  let highlightEl = null;
+                  for (const el of allEls) {
+                    if (el.children.length === 0) {
+                      const text = (el.textContent || '').trim();
+                      if (text.toLowerCase().includes(keyword.toLowerCase()) && text.length > 10 && text.length < 500) {
+                        highlightEl = el;
+                        break;
+                      }
+                    }
+                  }
+
+                  if (!highlightEl) {
+                    return { found: true, hasText: false, usedSelector, containerText: container.textContent.substring(0, 200) };
+                  }
+
+                  // Highlight the keyword in this element
+                  const text = highlightEl.textContent || '';
+                  const lower = text.toLowerCase();
+                  const klower = keyword.toLowerCase();
+                  const idx = lower.indexOf(klower);
+
+                  if (idx !== -1) {
+                    const before = text.substring(0, idx);
+                    const match = text.substring(idx, idx + keyword.length);
+                    const after = text.substring(idx + keyword.length);
+
+                    highlightEl.innerHTML = '';
+                    highlightEl.appendChild(document.createTextNode(before));
+                    const span = document.createElement('span');
+                    span.setAttribute('style', 'background: #FFFF00; color: #000000; padding: 0 3px; border-radius: 2px; font-weight: 700;');
+                    span.textContent = match;
+                    highlightEl.appendChild(span);
+                    highlightEl.appendChild(document.createTextNode(after));
+
+                    const rect = highlightEl.getBoundingClientRect();
+                    return {
+                      found: true,
+                      hasText: true,
+                      highlighted: true,
+                      usedSelector,
+                      textSnippet: text.substring(0, 100),
+                      kx: rect.left + rect.width / 2,
+                      ky: rect.top + rect.height / 2,
+                      kw: rect.width,
+                      kh: rect.height,
+                    };
+                  }
+
+                  return { found: true, hasText: true, highlighted: false, usedSelector };
+                }, query);
+                console.log('AI overview result:', JSON.stringify(aiResult));
+
+                // Get the keyword position
+                const aiPositioning = await page.evaluate(() => {
+                  const span = document.querySelector('span[style*=FFFF00], span[style*=background]');
+                  if (!span) return null;
+                  const rect = span.getBoundingClientRect();
+                  return {
+                    kx: rect.left + rect.width / 2,
+                    ky: rect.top + rect.height / 2,
+                    kw: rect.width,
+                    kh: rect.height,
+                  };
+                });
+                console.log('AI keyword position:', JSON.stringify(aiPositioning));
+
+                // Take full screenshot (server will crop to center)
+                const aiFullBuffer = await page.screenshot({ type: 'png', fullPage: false });
+                const aiFullBase64 = aiFullBuffer.toString('base64');
+                console.log('AI screenshot size:', aiFullBuffer.length, 'bytes');
+
+                await browser.close();
+
+                await fetch(callbackUrl, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    searchId: searchId,
+                    success: true,
+                    query: query,
+                    frameType: frameType,
+                    screenshot: aiFullBase64,
+                    titles: ['AI Overview - ' + query],
+                    keywordX: aiPositioning ? aiPositioning.kx : (aiResult && aiResult.kx ? aiResult.kx : 0),
+                    keywordY: aiPositioning ? aiPositioning.ky : (aiResult && aiResult.ky ? aiResult.ky : 0),
+                    keywordW: aiPositioning ? aiPositioning.kw : (aiResult && aiResult.kw ? aiResult.kw : 0),
+                    keywordH: aiPositioning ? aiPositioning.kh : (aiResult && aiResult.kh ? aiResult.kh : 0),
+                    deviceScaleFactor: 2,
+                  })
+                });
+                console.log('Callback sent with AI overview screenshot');
                 return;
               }
 
