@@ -576,7 +576,7 @@ jobs:
 
                 // Try clicking the AI Mode tab if the overview didn't load
                 try {
-                  const aiTab = page.locator('a:has-text("AI Mode"), .b_scopebar a[href*="AI"], [aria-label*=AI]').first();
+                  const aiTab = page.locator('[aria-label*=AI]').first();
                   if (await aiTab.isVisible({ timeout: 2000 })) {
                     await aiTab.click();
                     await page.waitForTimeout(5000);
