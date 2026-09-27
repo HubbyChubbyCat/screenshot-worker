@@ -202,19 +202,47 @@ jobs:
                 const oy = (positioning.ky * scale - targetY * positioning.vh) / (scale - 1);
                 
                 console.log('Transform: scale=' + scale + ' origin=(' + ox + ', ' + oy + ')');
+                console.log('Keyword at: (' + positioning.kx + ', ' + positioning.ky + ')');
+                console.log('Target screen: (' + (targetX * positioning.vw) + ', ' + (targetY * positioning.vh) + ')');
                 
-                // Apply the transform to the entire HTML element (not body, since
-                // body might have its own positioning context)
-                await page.evaluate(({ ox, oy, scale }) => {
-                  const html = document.documentElement;
-                  html.style.transform = 'scale(' + scale + ')';
-                  html.style.transformOrigin = ox + 'px ' + oy + 'px';
-                  html.style.width = (100 / scale) + '%';
-                  html.style.height = (100 / scale) + '%';
-                  html.style.overflow = 'hidden';
-                }, { ox, oy, scale });
+                // Apply the transform to the body element.
+                // We use body (not html) because body is the visible content container.
+                // We also need to set transform-origin in the correct units.
+                await page.evaluate(({ ox, oy, scale, targetX, targetY, vw, vh }) => {
+                  // Hide overflow on html to prevent scrollbars
+                  document.documentElement.style.overflow = 'hidden';
+                  
+                  // Apply transform to body
+                  document.body.style.transform = 'scale(' + scale + ')';
+                  document.body.style.transformOrigin = ox + 'px ' + oy + 'px';
+                  document.body.style.position = 'fixed';
+                  document.body.style.left = '0';
+                  document.body.style.top = '0';
+                  document.body.style.width = (100 / scale) + '%';
+                  
+                  // After the transform, verify the keyword position and adjust
+                  // with margin if needed
+                  setTimeout(() => {
+                    const span = document.querySelector('span[style*="FFFF00"], span[style*="background"]');
+                    if (span) {
+                      const rect = span.getBoundingClientRect();
+                      const currentX = rect.left + rect.width / 2;
+                      const targetScreenX = targetX * vw;
+                      const deltaX = targetScreenX - currentX;
+                      if (Math.abs(deltaX) > 5) {
+                        document.body.style.marginLeft = (parseFloat(document.body.style.marginLeft || '0') + deltaX) + 'px';
+                      }
+                      const currentY = rect.top + rect.height / 2;
+                      const targetScreenY = targetY * vh;
+                      const deltaY = targetScreenY - currentY;
+                      if (Math.abs(deltaY) > 5) {
+                        document.body.style.marginTop = (parseFloat(document.body.style.marginTop || '0') + deltaY) + 'px';
+                      }
+                    }
+                  }, 100);
+                }, { ox, oy, scale, targetX, targetY, vw: positioning.vw, vh: positioning.vh });
                 
-                await page.waitForTimeout(500);
+                await page.waitForTimeout(800);
               }
               
               // Take the screenshot
