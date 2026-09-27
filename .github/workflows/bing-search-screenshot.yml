@@ -77,7 +77,7 @@ jobs:
               if (frameType === 'bing-video') {
                 searchUrl = 'https://www.bing.com/videos/search?q=' + encodeURIComponent(query) + '&setlang=en&cc=US';
               } else if (frameType === 'wikipedia') {
-                searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(query) + '+site%3Awikipedia.org&setlang=en&cc=US';
+                searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(query + ' Wikipedia') + '&setlang=en&cc=US';
               } else {
                 // bing-results (default)
                 searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(query) + '&setlang=en&cc=US';
@@ -96,27 +96,58 @@ jobs:
                 }
               } catch {}
               
-              // For Wikipedia frame: click the first Wikipedia result to open the article
+              // For Wikipedia frame: search Bing for "keyword Wikipedia", find the
+              // Wikipedia link URL, then navigate directly to it.
               if (frameType === 'wikipedia') {
+                // Get the Wikipedia URL from the first search result
+                let wikiUrl = null;
                 try {
-                  const wikiLink = page.locator('a[href*=\"wikipedia.org\"]').first();
-                  if (await wikiLink.isVisible({ timeout: 3000 })) {
-                    await wikiLink.click();
-                    await page.waitForLoadState('domcontentloaded');
-                    await page.waitForTimeout(3000);
+                  const href = await page.evaluate(() => {
+                    const link = document.querySelector('#b_results a[href*=\"wikipedia.org/wiki\"]');
+                    return link ? link.href : null;
+                  });
+                  if (href) {
+                    wikiUrl = href;
+                    console.log('Found Wikipedia URL:', wikiUrl);
                   }
                 } catch {}
+                
+                // If we found a Wikipedia URL, navigate to it directly
+                if (wikiUrl) {
+                  console.log('Navigating to Wikipedia article:', wikiUrl);
+                  await page.goto(wikiUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+                  await page.waitForTimeout(3000);
+                } else {
+                  // Fallback: try clicking the link
+                  try {
+                    const wikiLink = page.locator('a[href*=\"wikipedia.org\"]').first();
+                    if (await wikiLink.isVisible({ timeout: 3000 })) {
+                      await wikiLink.click();
+                      await page.waitForLoadState('domcontentloaded');
+                      await page.waitForTimeout(3000);
+                    }
+                  } catch {}
+                }
                 
                 // Now we're on the Wikipedia article page.
                 // Highlight the keyword in the H1 heading (the article title).
                 await page.evaluate(({ keyword, css }) => {
-                  // Wikipedia's article title is in #firstHeading or h1
-                  const h1 = document.querySelector('#firstHeading') || document.querySelector('h1');
-                  if (!h1) return;
+                  // Wikipedia's article title is in #firstHeading or h1.firstHeading
+                  const h1 = document.querySelector('#firstHeading') 
+                    || document.querySelector('h1.firstHeading')
+                    || document.querySelector('h1');
+                  if (!h1) {
+                    console.log('No H1 found');
+                    return;
+                  }
                   
                   const text = h1.textContent || '';
                   const idx = text.toLowerCase().indexOf(keyword.toLowerCase());
-                  if (idx === -1) return;
+                  if (idx === -1) {
+                    // Try partial match (e.g. "Elon Musk" might be "Elon Musk" in title)
+                    console.log('Keyword not found in H1:', text);
+                    return;
+                  }
                   
                   const before = text.substring(0, idx);
                   const match = text.substring(idx, idx + keyword.length);
@@ -133,7 +164,10 @@ jobs:
                 await page.waitForTimeout(300);
                 
                 // Log the page title for debugging
-                const pageTitle = await page.evaluate(() => document.querySelector('#firstHeading, h1')?.textContent?.trim() || 'unknown');
+                const pageTitle = await page.evaluate(() => {
+                  const h1 = document.querySelector('#firstHeading') || document.querySelector('h1');
+                  return h1 ? h1.textContent.trim() : (document.title || 'unknown');
+                });
                 console.log('Wikipedia page title:', pageTitle);
                 
                 // Scroll to top
@@ -142,7 +176,10 @@ jobs:
                 
                 // Find the highlight span's position
                 const wikiPositioning = await page.evaluate(() => {
-                  const span = document.querySelector('#firstHeading span[style*=\"background\"], h1 span[style*=\"background\"]');
+                  // Look for the span we just created inside the H1
+                  const h1 = document.querySelector('#firstHeading') || document.querySelector('h1');
+                  if (!h1) return null;
+                  const span = h1.querySelector('span[style*=\"background\"]');
                   if (!span) return null;
                   const rect = span.getBoundingClientRect();
                   return {
