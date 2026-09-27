@@ -199,8 +199,27 @@ jobs:
                 // Let's use scale = 2.5 and adjust origin.
                 
                 const scale = 2.5;
-                const targetXPercent = 0.24; // keyword at 24% from left
-                const targetYPercent = 0.45; // keyword at 45% from top (slightly above center to leave room for tabs above)
+                // The reference has keyword at ~52% vertical, ~24% horizontal.
+                // Our Bing layout has results starting further left, so we need
+                // to shift the keyword further right by using a higher target X.
+                // Since the results column starts at ~13% from left in our layout,
+                // and we want the keyword at 24% in the final image, we need to
+                // account for the fact that zooming in doesn't change the relative
+                // position within the column. So we set targetX higher to push
+                // the keyword toward center.
+                // Actually, the real issue is that the reference has more left margin.
+                // Let's shift the entire view right by targeting the keyword at a
+                // position that accounts for the Bing results column offset.
+                // After zoom 2.5x, the keyword at 11% should move to ~24% if we
+                // increase targetXPercent.
+                // targetX = (keywordCenterX * scale - targetX * viewportW) / (scale - 1)
+                // We want the keyword to appear at 24% in the final image.
+                // But the Bing results column is narrower than the viewport, so
+                // the keyword can't be at 24% unless we pad the left.
+                // Solution: set targetXPercent to 0.24 but also add left padding
+                // to the body to shift everything right.
+                const targetXPercent = 0.24; // keyword at 24% from left (like reference)
+                const targetYPercent = 0.50; // keyword at 50% from top (centered)
                 
                 // After scaling by `scale`, the keyword's screen position will be:
                 //   screenX = (keywordCenterX - originX) * scale + originX
