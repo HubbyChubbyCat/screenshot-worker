@@ -81,7 +81,7 @@ jobs:
               } else if (frameType === 'knowledge-panel') {
                 searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(query) + '&setlang=en&cc=US';
               } else if (frameType === 'bing-ai-overview') {
-                searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(query) + '&form=AIOTEX&setlang=en&cc=US';
+                searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(query) + '&form=BXMLPH&setlang=en&cc=US';
               } else {
                 // bing-results (default)
                 searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(query) + '&setlang=en&cc=US';
@@ -585,67 +585,37 @@ jobs:
 
                 // Find the AI overview box and highlight the keyword
                 const aiResult = await page.evaluate((keyword) => {
-                  // The AI overview is typically in .b_algoBottomAnomaly, .b_ans,
-                  // or a container with AI-related classes
-                  const selectors = [
-                    '.b_algoBottomAnomaly',
-                    '.b_ans',
-                    '#b_results > li.b_ans',
-                    '[class*=aiOverview]',
-                    '[class*=AIOverview]',
-                    '.b_canvas',
-                    '#aiOverview',
-                    '.b_top',
-                  ];
+                  // Find ALL elements containing the keyword that are visible
+                  // (non-zero dimensions) and in the top 60% of the page.
+                  // The AI overview is typically the first big text block at the top.
+                  const allEls = document.querySelectorAll('#b_results *');
+                  const vh = window.innerHeight;
+                  let bestEl = null;
+                  let bestY = vh; // start with bottom of viewport
 
-                  let container = null;
-                  let usedSelector = '';
-                  for (const sel of selectors) {
-                    container = document.querySelector(sel);
-                    if (container && container.textContent && container.textContent.trim().length > 50) {
-                      usedSelector = sel;
-                      break;
-                    }
-                    container = null;
-                  }
-
-                  if (!container) {
-                    // Fallback: find the first element in #b_results that has
-                    // substantial text (the AI overview is usually the first big block)
-                    const results = document.querySelectorAll('#b_results > li');
-                    for (const li of results) {
-                      const text = (li.textContent || '').trim();
-                      if (text.length > 200 && text.toLowerCase().includes(keyword.toLowerCase())) {
-                        container = li;
-                        usedSelector = 'first-result-li';
-                        break;
-                      }
-                    }
-                  }
-
-                  if (!container) {
-                    return { found: false, reason: 'No AI overview found' };
-                  }
-
-                  // Find the first text element containing the keyword
-                  const allEls = container.querySelectorAll('*');
-                  let highlightEl = null;
                   for (const el of allEls) {
                     if (el.children.length === 0) {
                       const text = (el.textContent || '').trim();
-                      if (text.toLowerCase().includes(keyword.toLowerCase()) && text.length > 10 && text.length < 500) {
-                        highlightEl = el;
-                        break;
+                      if (text.toLowerCase().includes(keyword.toLowerCase()) && text.length > 15 && text.length < 500) {
+                        const rect = el.getBoundingClientRect();
+                        // Must be visible and in the top 60% of the viewport
+                        if (rect.width > 0 && rect.height > 0 && rect.top > 0 && rect.top < vh * 0.6) {
+                          // Prefer elements higher up on the page (smaller Y = better)
+                          if (rect.top < bestY) {
+                            bestY = rect.top;
+                            bestEl = el;
+                          }
+                        }
                       }
                     }
                   }
 
-                  if (!highlightEl) {
-                    return { found: true, hasText: false, usedSelector, containerText: container.textContent.substring(0, 200) };
+                  if (!bestEl) {
+                    return { found: false, reason: 'No visible keyword element found in top half' };
                   }
 
                   // Highlight the keyword in this element
-                  const text = highlightEl.textContent || '';
+                  const text = bestEl.textContent || '';
                   const lower = text.toLowerCase();
                   const klower = keyword.toLowerCase();
                   const idx = lower.indexOf(klower);
@@ -655,20 +625,18 @@ jobs:
                     const match = text.substring(idx, idx + keyword.length);
                     const after = text.substring(idx + keyword.length);
 
-                    highlightEl.innerHTML = '';
-                    highlightEl.appendChild(document.createTextNode(before));
+                    bestEl.innerHTML = '';
+                    bestEl.appendChild(document.createTextNode(before));
                     const span = document.createElement('span');
                     span.setAttribute('style', 'background: #FFFF00; color: #000000; padding: 0 3px; border-radius: 2px; font-weight: 700;');
                     span.textContent = match;
-                    highlightEl.appendChild(span);
-                    highlightEl.appendChild(document.createTextNode(after));
+                    bestEl.appendChild(span);
+                    bestEl.appendChild(document.createTextNode(after));
 
-                    const rect = highlightEl.getBoundingClientRect();
+                    const rect = bestEl.getBoundingClientRect();
                     return {
                       found: true,
-                      hasText: true,
                       highlighted: true,
-                      usedSelector,
                       textSnippet: text.substring(0, 100),
                       kx: rect.left + rect.width / 2,
                       ky: rect.top + rect.height / 2,
@@ -677,7 +645,7 @@ jobs:
                     };
                   }
 
-                  return { found: true, hasText: true, highlighted: false, usedSelector };
+                  return { found: false, reason: 'Keyword not in element text' };
                 }, query);
                 console.log('AI overview result:', JSON.stringify(aiResult));
 
