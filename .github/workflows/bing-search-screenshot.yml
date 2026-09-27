@@ -96,7 +96,7 @@ jobs:
                 }
               } catch {}
               
-              // For Wikipedia frame: search Bing for "keyword Wikipedia", find the
+              // For Wikipedia frame: search Bing for keyword Wikipedia, find the
               // Wikipedia link URL, then navigate directly to it.
               if (frameType === 'wikipedia') {
                 // Get the Wikipedia URL from the first search result
@@ -144,7 +144,7 @@ jobs:
                   const text = h1.textContent || '';
                   const idx = text.toLowerCase().indexOf(keyword.toLowerCase());
                   if (idx === -1) {
-                    // Try partial match (e.g. "Elon Musk" might be "Elon Musk" in title)
+                    // Try partial match (Elon Musk might be in title)
                     console.log('Keyword not found in H1:', text);
                     return;
                   }
