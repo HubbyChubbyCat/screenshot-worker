@@ -162,13 +162,14 @@ jobs:
               await page.evaluate(() => window.scrollTo(0, 0));
               await page.waitForTimeout(300);
               
-              // Strategy: Use page.screenshot({ clip }) to capture a sub-region
-              // of the page centered on the keyword. This is the most reliable
-              // approach because clip captures raw page pixels — no CSS transform
-              // math required.
+              // Strategy: Take a full-page screenshot, then send the keyword's
+              // position back to the server. The server will crop the image
+              // using sharp to perfectly center the keyword.
               //
-              // The keyword will be at (targetX, targetY) in the output image
-              // because we offset the clip origin by exactly the right amount.
+              // We can't use page.screenshot({ clip }) because it clamps
+              // negative coordinates to 0 — when the keyword is near the left
+              // edge of the page, the clip can't start far enough left to
+              // center the keyword.
               
               const positioning = await page.evaluate(() => {
                 const span = document.querySelector('span[style*="FFFF00"], span[style*="background"]');
@@ -177,76 +178,42 @@ jobs:
                 return {
                   kx: rect.left + rect.width / 2,
                   ky: rect.top + rect.height / 2,
+                  kw: rect.width,
+                  kh: rect.height,
                 };
               });
               console.log('Keyword position:', JSON.stringify(positioning));
               
-              if (positioning) {
-                // We want the final image to be aspectW × aspectH (e.g. 1280×720).
-                // We'll capture a clip of size (aspectW / zoom) × (aspectH / zoom)
-                // centered so the keyword is at (targetX, targetY) in the output.
-                //
-                // The clip captures actual page pixels, so:
-                //   clip.x = kx - targetX * clipW
-                //   clip.y = ky - targetY * clipH
-                //   clip.width = clipW
-                //   clip.height = clipH
-                //
-                // The output image will be clipW × clipH pixels.
-                // To get a higher-resolution output, we use deviceScaleFactor=2
-                // (already set in the context), which doubles the clip dimensions
-                // in the actual screenshot pixels.
-                
-                const zoom = 2.5;
-                const targetX = 0.50;  // keyword at 50% from left (perfectly centered)
-                const targetY = 0.50;  // keyword at 50% from top (perfectly centered)
-                
-                const clipW = aspectW / zoom;   // 1280/2.5 = 512
-                const clipH = aspectH / zoom;   // 720/2.5 = 288
-                
-                const clipX = positioning.kx - targetX * clipW;
-                const clipY = positioning.ky - targetY * clipH;
-                
-                console.log('Clip:', { x: clipX, y: clipY, w: clipW, h: clipH });
-                
-                // Take screenshot with clip
-                const screenshotBuffer = await page.screenshot({
-                  type: 'png',
-                  clip: {
-                    x: clipX,
-                    y: clipY,
-                    width: clipW,
-                    height: clipH,
-                  },
-                });
-                
-                const screenshotBase64 = screenshotBuffer.toString('base64');
-                console.log('Screenshot size:', screenshotBuffer.length, 'bytes');
-                
-                await browser.close();
-                
-                await fetch(callbackUrl, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    searchId: searchId,
-                    success: true,
-                    query: query,
-                    frameType: frameType,
-                    screenshot: screenshotBase64,
-                    titles: titles
-                  })
-                });
-                console.log('Callback sent with screenshot');
-                return;
-              }
-              
-              // Fallback: full page screenshot if positioning failed
-              const screenshotBuffer = await page.screenshot({ type: 'png' });
-              const screenshotBase64 = screenshotBuffer.toString('base64');
-              console.log('Screenshot size:', screenshotBuffer.length, 'bytes');
+              // Take a full-page screenshot at the current viewport + deviceScaleFactor
+              const fullBuffer = await page.screenshot({ type: 'png', fullPage: false });
+              const fullBase64 = fullBuffer.toString('base64');
+              console.log('Full screenshot size:', fullBuffer.length, 'bytes');
               
               await browser.close();
+              
+              // Send the full screenshot + keyword position back to the server.
+              // The server will crop it to center the keyword.
+              await fetch(callbackUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  searchId: searchId,
+                  success: true,
+                  query: query,
+                  frameType: frameType,
+                  screenshot: fullBase64,
+                  titles: titles,
+                  // Keyword position in CSS pixels (at 1x, before deviceScaleFactor)
+                  keywordX: positioning ? positioning.kx : 0,
+                  keywordY: positioning ? positioning.ky : 0,
+                  keywordW: positioning ? positioning.kw : 0,
+                  keywordH: positioning ? positioning.kh : 0,
+                  // The deviceScaleFactor used (for converting CSS px to image px)
+                  deviceScaleFactor: 2,
+                })
+              });
+              console.log('Callback sent with full screenshot + keyword position');
+              return;
               
               // Send result back with the screenshot as base64
               await fetch(callbackUrl, {
