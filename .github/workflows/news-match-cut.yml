@@ -32,7 +32,8 @@ jobs:
           FPS: ${{ github.event.client_payload.fps }}
           FRAMES_PER_IMAGE: ${{ github.event.client_payload.framesPerImage }}
         run: |
-          node -e "
+                    cat > /tmp/capture.js << 'CAPTURE_SCRIPT'
+"
           const { chromium } = require('playwright');
           
           (async () => {
@@ -351,4 +352,6 @@ jobs:
               }).catch(() => {});
             }
           })();
-          "
+          
+CAPTURE_SCRIPT
+          node /tmp/capture.js
