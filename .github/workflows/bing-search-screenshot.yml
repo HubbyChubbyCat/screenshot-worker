@@ -1,0 +1,200 @@
+name: Bing Search Screenshot
+on:
+  repository_dispatch:
+    types: [bing-search-screenshot]
+
+jobs:
+  screenshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Playwright
+        run: |
+          npm init -y
+          npm install playwright
+          npx playwright install chromium --with-deps
+
+      - name: Capture Bing Screenshot
+        env:
+          QUERY: ${{ github.event.client_payload.query }}
+          SEARCH_ID: ${{ github.event.client_payload.searchId }}
+          CALLBACK_URL: ${{ secrets.CALLBACK_URL }}
+          FRAME_TYPE: ${{ github.event.client_payload.frameType }}
+          HIGHLIGHT_COLOR: ${{ github.event.client_payload.highlightColor }}
+          HIGHLIGHT_TYPE: ${{ github.event.client_payload.highlightType }}
+          ASPECT_W: ${{ github.event.client_payload.aspectW }}
+          ASPECT_H: ${{ github.event.client_payload.aspectH }}
+        run: |
+          node -e "
+          const { chromium } = require('playwright');
+          
+          (async () => {
+            const query = process.env.QUERY;
+            const searchId = process.env.SEARCH_ID;
+            const callbackBase = process.env.CALLBACK_URL.replace(/\/$/, '');
+            const callbackUrl = callbackBase + '/api/digital-text/bing-callback';
+            const frameType = process.env.FRAME_TYPE || 'bing-results';
+            const highlightColor = process.env.HIGHLIGHT_COLOR || 'yellow';
+            const highlightType = process.env.HIGHLIGHT_TYPE || 'plain';
+            const aspectW = parseInt(process.env.ASPECT_W || '1280');
+            const aspectH = parseInt(process.env.ASPECT_H || '720');
+            
+            console.log('Frame type:', frameType);
+            console.log('Query:', query);
+            console.log('Aspect:', aspectW + 'x' + aspectH);
+            
+            const highlightColors = {
+              yellow: { bg: '#FFFF00', fg: '#000000', underline: '#F44336' },
+              green: { bg: '#4CAF50', fg: '#FFFFFF', underline: '#2E7D32' },
+              blue: { bg: '#2196F3', fg: '#FFFFFF', underline: '#1565C0' },
+              pink: { bg: '#E91E63', fg: '#FFFFFF', underline: '#AD1457' },
+              orange: { bg: '#FF9800', fg: '#000000', underline: '#E65100' },
+              cyan: { bg: '#00BCD4', fg: '#000000', underline: '#00838F' }
+            };
+            const colors = highlightColors[highlightColor] || highlightColors.yellow;
+            const highlightCSS = highlightType === 'underline'
+              ? 'border-bottom: 3px solid ' + colors.underline + '; padding-bottom: 1px;'
+              : 'background: ' + colors.bg + '; color: ' + colors.fg + '; padding: 0 3px; border-radius: 2px; font-weight: 700;';
+            
+            try {
+              const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+              const context = await browser.newContext({
+                viewport: { width: aspectW, height: aspectH },
+                deviceScaleFactor: 1,
+                locale: 'en-US',
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' }
+              });
+              const page = await context.newPage();
+              
+              // Determine the URL based on frame type
+              let searchUrl;
+              if (frameType === 'bing-video') {
+                searchUrl = 'https://www.bing.com/videos/search?q=' + encodeURIComponent(query) + '&setlang=en&cc=US';
+              } else if (frameType === 'wikipedia') {
+                searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(query) + '+site%3Awikipedia.org&setlang=en&cc=US';
+              } else {
+                // bing-results (default)
+                searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(query) + '&setlang=en&cc=US';
+              }
+              
+              console.log('Navigating to:', searchUrl);
+              await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+              await page.waitForTimeout(5000);
+              
+              // Dismiss cookie consent
+              try {
+                const consentBtn = page.locator('#bnp_btn_accept, #acceptBnp, button:has-text(\"Accept\"), button:has-text(\"Agree\")').first();
+                if (await consentBtn.isVisible({ timeout: 2000 })) {
+                  await consentBtn.click();
+                  await page.waitForTimeout(500);
+                }
+              } catch {}
+              
+              // For Wikipedia frame: try to click the first Wikipedia result
+              if (frameType === 'wikipedia') {
+                try {
+                  const wikiLink = page.locator('a[href*=\"wikipedia.org\"]').first();
+                  if (await wikiLink.isVisible({ timeout: 3000 })) {
+                    await wikiLink.click();
+                    await page.waitForLoadState('domcontentloaded');
+                    await page.waitForTimeout(3000);
+                  }
+                } catch {}
+              }
+              
+              // Log the first few result titles for debugging
+              const titles = await page.evaluate(() => {
+                const links = document.querySelectorAll('#b_results li.b_algo h2 a, .b_algo h2 a');
+                return Array.from(links).slice(0, 5).map(a => a.textContent?.trim());
+              });
+              console.log('Result titles:', JSON.stringify(titles));
+              
+              // Hide the search input bar but keep the scope tabs
+              await page.evaluate(() => {
+                const searchForm = document.querySelector('#sb_form');
+                if (searchForm) searchForm.style.display = 'none';
+                const logo = document.querySelector('.b_logo');
+                if (logo) logo.style.display = 'none';
+                const header = document.querySelector('#b_header');
+                if (header) {
+                  header.style.paddingTop = '0px';
+                  header.style.height = 'auto';
+                }
+                const content = document.querySelector('#b_content');
+                if (content) content.style.paddingTop = '8px';
+                const results = document.querySelector('#b_results');
+                if (results) results.style.marginTop = '0px';
+              });
+              await page.waitForTimeout(300);
+              
+              // Highlight the keyword in the FIRST result title only
+              await page.evaluate((keyword, css) => {
+                // For Bing video, titles might be in different selectors
+                let titleLink = document.querySelector('#b_results li.b_algo h2 a');
+                if (!titleLink) titleLink = document.querySelector('.mc_vtvc_title a, .vrhtitle a, h2 a');
+                if (!titleLink) return;
+                
+                const text = titleLink.textContent || '';
+                const idx = text.toLowerCase().indexOf(keyword.toLowerCase());
+                if (idx === -1) return;
+                
+                const before = text.substring(0, idx);
+                const match = text.substring(idx, idx + keyword.length);
+                const after = text.substring(idx + keyword.length);
+                
+                titleLink.innerHTML = '';
+                titleLink.appendChild(document.createTextNode(before));
+                const span = document.createElement('span');
+                span.setAttribute('style', css);
+                span.textContent = match;
+                titleLink.appendChild(span);
+                titleLink.appendChild(document.createTextNode(after));
+              }, query, highlightCSS);
+              await page.waitForTimeout(300);
+              
+              // Scroll to top
+              await page.evaluate(() => window.scrollTo(0, 0));
+              await page.waitForTimeout(300);
+              
+              // Take the screenshot
+              const screenshotBuffer = await page.screenshot({ type: 'png' });
+              const screenshotBase64 = screenshotBuffer.toString('base64');
+              console.log('Screenshot size:', screenshotBuffer.length, 'bytes');
+              
+              await browser.close();
+              
+              // Send result back with the screenshot as base64
+              await fetch(callbackUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  searchId: searchId,
+                  success: true,
+                  query: query,
+                  frameType: frameType,
+                  screenshot: screenshotBase64,
+                  titles: titles
+                })
+              });
+              console.log('Callback sent with screenshot');
+              
+            } catch (err) {
+              console.error('Capture failed:', err.message);
+              await fetch(callbackUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  searchId: searchId,
+                  success: false,
+                  error: err.message
+                })
+              }).catch(() => {});
+            }
+          })();
+          "
