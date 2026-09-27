@@ -475,6 +475,34 @@ jobs:
                 }, query);
                 console.log('Knowledge panel result:', JSON.stringify(kpResult));
 
+                // Debug: dump the #b_context HTML structure
+                const kpDebug = await page.evaluate(() => {
+                  const panel = document.querySelector('#b_context');
+                  if (!panel) return { found: false };
+                  // Get all leaf elements with text
+                  const texts = [];
+                  panel.querySelectorAll('*').forEach(el => {
+                    if (el.children.length === 0) {
+                      const text = (el.textContent || '').trim();
+                      if (text.length > 2) {
+                        texts.push({
+                          tag: el.tagName,
+                          class: (el.className || '').toString().substring(0, 50),
+                          id: el.id || '',
+                          text: text.substring(0, 80)
+                        });
+                      }
+                    }
+                  });
+                  return {
+                    found: true,
+                    innerHTML: panel.innerHTML.substring(0, 500),
+                    childCount: panel.children.length,
+                    texts: texts.slice(0, 15)
+                  };
+                });
+                console.log('KP debug:', JSON.stringify(kpDebug).substring(0, 3000));
+
                 // Scroll the panel into view if found
                 if (kpResult && kpResult.found) {
                   await page.evaluate(() => {
