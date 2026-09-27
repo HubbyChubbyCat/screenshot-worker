@@ -19,22 +19,10 @@ jobs:
           npm install playwright
           npx playwright install chromium --with-deps
 
-      - name: Capture News Articles
-        env:
-          KEYWORD: ${{ github.event.client_payload.keyword }}
-          SEARCH_ID: ${{ github.event.client_payload.searchId }}
-          CALLBACK_URL: ${{ secrets.CALLBACK_URL }}
-          COUNT: ${{ github.event.client_payload.count }}
-          ASPECT_W: ${{ github.event.client_payload.aspectW }}
-          ASPECT_H: ${{ github.event.client_payload.aspectH }}
-          HIGHLIGHT_COLOR: ${{ github.event.client_payload.highlightColor }}
-          HIGHLIGHT_TYPE: ${{ github.event.client_payload.highlightType }}
-          FPS: ${{ github.event.client_payload.fps }}
-          FRAMES_PER_IMAGE: ${{ github.event.client_payload.framesPerImage }}
+      - name: Create capture script
         run: |
-                    cat > /tmp/capture.js << 'CAPTURE_SCRIPT'
-"
-          const { chromium } = require('playwright');
+          cat > capture.js << 'CAPTURE_SCRIPT'
+                    const { chromium } = require('playwright');
           
           (async () => {
             const keyword = process.env.KEYWORD;
@@ -62,7 +50,6 @@ jobs:
               ? 'border-bottom: 3px solid ' + colors.underline + '; padding-bottom: 1px;'
               : 'background: ' + colors.bg + '; color: ' + colors.fg + '; padding: 0 3px; border-radius: 2px; font-weight: 700;';
             
-            // Approved domains
             const domains = [
               'bbc.com', 'theguardian.com', 'aljazeera.com', 'dw.com', 'euronews.com',
               'elpais.com', 'scmp.com', 'cbsnews.com', 'nbcnews.com', 'npr.org',
@@ -90,8 +77,7 @@ jobs:
                 extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' }
               });
               
-              // Step 1: Search Bing for the keyword (no site: filter — too long)
-              // We filter results to approved domains afterwards
+              // Search Bing
               const searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(keyword) + '&setlang=en&cc=US';
               console.log('Searching Bing for:', keyword);
               
@@ -101,16 +87,14 @@ jobs:
               
               // Dismiss cookie consent
               try {
-                const consentBtn = searchPage.locator('#bnp_btn_accept, #acceptBnp, button:has-text(\"Accept\"), button:has-text(\"Agree\")').first();
+                const consentBtn = searchPage.locator('#bnp_btn_accept, #acceptBnp, button:has-text("Accept"), button:has-text("Agree")').first();
                 if (await consentBtn.isVisible({ timeout: 2000 })) {
                   await consentBtn.click();
                   await searchPage.waitForTimeout(500);
                 }
               } catch {}
               
-              // Extract article URLs from Bing results
-              // Bing wraps links in redirect URLs (bing.com/ck/a), so we need
-              // to extract the real URL from the cite element or data-href
+              // Extract article URLs - handle Bing redirect links
               const articleUrls = await searchPage.evaluate(() => {
                 const results = [];
                 const items = document.querySelectorAll('#b_results li.b_algo');
@@ -119,36 +103,14 @@ jobs:
                   if (!titleLink) continue;
                   const title = (titleLink.textContent || '').trim();
                   
-                  // Try to get the real URL from the cite element
+                  // Get real URL from cite element
                   let realUrl = '';
                   const cite = item.querySelector('cite');
                   if (cite) {
                     const citeText = (cite.textContent || '').trim();
-                    // Cite text is like "en.wikipedia.org > wiki > Elon_Musk"
-                    // Convert it to a URL
                     const firstPart = citeText.split(' ')[0].split('>')[0].trim();
                     if (firstPart) {
-                      // Check if it starts with http, otherwise prepend https://
                       realUrl = firstPart.startsWith('http') ? firstPart : 'https://' + firstPart;
-                    }
-                  }
-                  
-                  // Also try data-href attribute (Bing sometimes stores the real URL there)
-                  if (!realUrl) {
-                    const dataHref = titleLink.getAttribute('data-href') || titleLink.getAttribute('href');
-                    if (dataHref && !dataHref.includes('bing.com/ck/')) {
-                      realUrl = dataHref;
-                    }
-                  }
-                  
-                  // Also try the .tilk element which has the actual link
-                  if (!realUrl) {
-                    const tilk = item.querySelector('a.tilk, a[data-href]');
-                    if (tilk) {
-                      const dh = tilk.getAttribute('data-href') || tilk.href;
-                      if (dh && !dh.includes('bing.com/ck/')) {
-                        realUrl = dh;
-                      }
                     }
                   }
                   
@@ -159,30 +121,15 @@ jobs:
                 return results;
               });
               console.log('Found ' + articleUrls.length + ' articles from Bing');
+              console.log('Sample URLs:', articleUrls.slice(0, 5).map(a => a.url));
               
-              // Debug: dump page info
-              const debugInfo = await searchPage.evaluate(() => {
-                const allLinks = document.querySelectorAll('#b_results a');
-                const linkInfo = Array.from(allLinks).slice(0, 10).map(a => ({
-                  href: a.href ? a.href.substring(0, 80) : '',
-                  text: (a.textContent || '').trim().substring(0, 60)
-                }));
-                const b_algoCount = document.querySelectorAll('#b_results li.b_algo').length;
-                const h2Count = document.querySelectorAll('#b_results h2').length;
-                const h2aCount = document.querySelectorAll('#b_results h2 a').length;
-                const bodyTextLen = (document.body.textContent || '').length;
-                return { b_algoCount, h2Count, h2aCount, bodyTextLen, linkInfo };
-              });
-              console.log('Debug:', JSON.stringify(debugInfo).substring(0, 2000));
-              
-              // Filter to approved domains only
               const approved = articleUrls.filter(a => isApproved(a.url)).slice(0, maxArticles);
               console.log('Approved articles: ' + approved.length);
-              approved.forEach((a, i) => console.log('  ' + (i+1) + '. ' + a.title.substring(0, 60) + ' - ' + a.url.substring(0, 80)));
+              approved.forEach((a, i) => console.log('  ' + (i+1) + '. ' + a.title.substring(0, 60) + ' - ' + a.url));
               
               await searchPage.close();
               
-              // Step 2: Visit each article and capture a screenshot
+              // Visit each article and capture screenshot
               const screenshots = [];
               for (let i = 0; i < approved.length; i++) {
                 const article = approved[i];
@@ -193,16 +140,16 @@ jobs:
                   await page.goto(article.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
                   await page.waitForTimeout(3000);
                   
-                  // Try to dismiss cookie consent on the article page
+                  // Dismiss cookie consent
                   try {
-                    const btns = page.locator('button:has-text(\"Accept\"), button:has-text(\"Agree\"), button:has-text(\"I accept\"), button:has-text(\"OK\"), button:has-text(\"Got it\")');
+                    const btns = page.locator('button:has-text("Accept"), button:has-text("Agree"), button:has-text("I accept"), button:has-text("OK"), button:has-text("Got it")');
                     if (await btns.first().isVisible({ timeout: 1500 })) {
                       await btns.first().click();
                       await page.waitForTimeout(500);
                     }
                   } catch {}
                   
-                  // Highlight the keyword in the page
+                  // Highlight keyword
                   const highlightResult = await page.evaluate((kw, css) => {
                     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
                       acceptNode(node) {
@@ -227,9 +174,9 @@ jobs:
                       const text = textNode.textContent;
                       const lower = text.toLowerCase();
                       const klower = kw.toLowerCase();
-                      let idx = lower.indexOf(klower);
+                      const idx = lower.indexOf(klower);
                       
-                      while (idx !== -1 && highlighted < 3) {
+                      if (idx !== -1 && highlighted < 3) {
                         const before = text.substring(0, idx);
                         const match = text.substring(idx, idx + kw.length);
                         const after = text.substring(idx + kw.length);
@@ -245,72 +192,57 @@ jobs:
                         
                         textNode.parentNode.replaceChild(frag, textNode);
                         highlighted++;
-                        break; // move to next text node
+                        break;
                       }
                     }
                     
-                    // Find the first highlighted span position
-                    const span = document.querySelector('span[style*=FFFF00], span[style*=background]');
+                    const span = document.querySelector('span[style*="FFFF00"], span[style*="background"]');
                     if (!span) return null;
                     const rect = span.getBoundingClientRect();
                     if (rect.width === 0 || rect.height === 0) return null;
                     
-                    return {
-                      kx: rect.left + rect.width / 2,
-                      ky: rect.top + rect.height / 2,
-                      kw: rect.width,
-                      kh: rect.height
-                    };
+                    return { kx: rect.left + rect.width/2, ky: rect.top + rect.height/2, kw: rect.width, kh: rect.height };
                   }, keyword, highlightCSS);
                   
                   if (!highlightResult) {
-                    console.log('  Keyword not found on page, skipping');
+                    console.log('  Keyword not found, skipping');
                     await page.close();
                     continue;
                   }
                   
-                  // Scroll the keyword into view
+                  // Scroll keyword into view
                   await page.evaluate(() => {
-                    const span = document.querySelector('span[style*=FFFF00], span[style*=background]');
+                    const span = document.querySelector('span[style*="FFFF00"], span[style*="background"]');
                     if (span) span.scrollIntoView({ block: 'center' });
                   });
                   await page.waitForTimeout(500);
                   
-                  // Re-read position after scroll
+                  // Re-read position
                   const finalPos = await page.evaluate(() => {
-                    const span = document.querySelector('span[style*=FFFF00], span[style*=background]');
+                    const span = document.querySelector('span[style*="FFFF00"], span[style*="background"]');
                     if (!span) return null;
                     const rect = span.getBoundingClientRect();
-                    return {
-                      kx: rect.left + rect.width / 2,
-                      ky: rect.top + rect.height / 2,
-                      kw: rect.width,
-                      kh: rect.height
-                    };
+                    return { kx: rect.left + rect.width/2, ky: rect.top + rect.height/2, kw: rect.width, kh: rect.height };
                   });
                   
                   if (!finalPos) {
-                    console.log('  Keyword position lost after scroll, skipping');
+                    console.log('  Position lost after scroll, skipping');
                     await page.close();
                     continue;
                   }
                   
-                  // Take full viewport screenshot
                   const screenshotBuffer = await page.screenshot({ type: 'png' });
-                  const screenshotBase64 = screenshotBuffer.toString('base64');
-                  
                   screenshots.push({
                     url: article.url,
                     title: article.title,
-                    screenshot: screenshotBase64,
+                    screenshot: screenshotBuffer.toString('base64'),
                     keywordX: finalPos.kx,
                     keywordY: finalPos.ky,
                     keywordW: finalPos.kw,
                     keywordH: finalPos.kh,
                     deviceScaleFactor: 2
                   });
-                  
-                  console.log('  Captured successfully (keyword at ' + Math.round(finalPos.kx) + ',' + Math.round(finalPos.ky) + ')');
+                  console.log('  Captured (keyword at ' + Math.round(finalPos.kx) + ',' + Math.round(finalPos.ky) + ')');
                 } catch (err) {
                   console.log('  Failed: ' + err.message);
                 } finally {
@@ -319,39 +251,38 @@ jobs:
               }
               
               await browser.close();
+              console.log('Total screenshots: ' + screenshots.length);
               
-              console.log('Total screenshots captured: ' + screenshots.length);
-              
-              // Send results back to server
               await fetch(callbackUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  searchId: searchId,
-                  success: true,
-                  keyword: keyword,
-                  screenshots: screenshots,
-                  fps: fps,
-                  framesPerImage: framesPerImage,
-                  aspectW: aspectW,
-                  aspectH: aspectH
+                  searchId, success: true, keyword, screenshots,
+                  fps, framesPerImage, aspectW, aspectH
                 })
               });
-              console.log('Callback sent with ' + screenshots.length + ' screenshots');
-              
+              console.log('Callback sent');
             } catch (err) {
               console.error('Capture failed:', err.message);
               await fetch(callbackUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  searchId: searchId,
-                  success: false,
-                  error: err.message
-                })
+                body: JSON.stringify({ searchId, success: false, error: err.message })
               }).catch(() => {});
             }
           })();
-          
-CAPTURE_SCRIPT
-          node /tmp/capture.js
+          CAPTURE_SCRIPT
+
+      - name: Run capture
+        env:
+          KEYWORD: ${{ github.event.client_payload.keyword }}
+          SEARCH_ID: ${{ github.event.client_payload.searchId }}
+          CALLBACK_URL: ${{ secrets.CALLBACK_URL }}
+          COUNT: ${{ github.event.client_payload.count }}
+          ASPECT_W: ${{ github.event.client_payload.aspectW }}
+          ASPECT_H: ${{ github.event.client_payload.aspectH }}
+          HIGHLIGHT_COLOR: ${{ github.event.client_payload.highlightColor }}
+          HIGHLIGHT_TYPE: ${{ github.event.client_payload.highlightType }}
+          FPS: ${{ github.event.client_payload.fps }}
+          FRAMES_PER_IMAGE: ${{ github.event.client_payload.framesPerImage }}
+        run: node capture.js
