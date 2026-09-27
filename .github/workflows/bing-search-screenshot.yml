@@ -234,11 +234,19 @@ jobs:
 
                 await page.waitForTimeout(2000);
 
-                // Find the PAA section position. The PAA section is between
-                // the result count and the first organic result. We find both
-                // positions and use the midpoint as the crop center.
-                // The keyword Elon Musk appears naturally in the PAA questions.
-                const paaPositioning = await page.evaluate((keyword) => {
+                // The PAA section is not in the DOM, so we use a fixed position.
+                // On Bing, the PAA section appears around 200-400px from the top
+                // of the results area, which is about 250-450px from the page top.
+                // We set the keyword position to the center of this area.
+                const paaPositioning = {
+                  kx: 400,   // Center of the results column (approx 30% of 1280)
+                  ky: 300,   // PAA section center (approx 200-400px range)
+                  kw: 200,
+                  kh: 40,
+                };
+                
+                // Also try to find the actual result count for debugging
+                const _paaDebug = await page.evaluate((keyword) => {
                   // Find the result count element (About X results)
                   const allElements = document.querySelectorAll('#b_results *');
                   let resultsCountRect = null;
@@ -296,8 +304,9 @@ jobs:
                     };
                   }
 
-                  return null;
+                  return { debug: true };
                 }, query);
+                console.log('PAA debug:', JSON.stringify(_paaDebug));
                 console.log('PAA keyword position:', JSON.stringify(paaPositioning));
 
                 // Take full screenshot (server will crop to center)
