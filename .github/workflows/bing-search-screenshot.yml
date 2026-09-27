@@ -162,86 +162,117 @@ jobs:
               await page.evaluate(() => window.scrollTo(0, 0));
               await page.waitForTimeout(300);
               
-              // Find the highlight span's position and zoom/center on it.
-              // The goal: the keyword should be at ~50% vertical, ~24% horizontal
-              // (matching the reference image), and zoomed in so only ~1.5 results
-              // are visible.
+              // Find the highlight span's position, then use a high-resolution
+              // viewport + screenshot clip to zoom in and center the keyword.
+              //
+              // Strategy: 
+              //   1. Set viewport to a large size (e.g. 3x the target) so we capture
+              //      more detail, then screenshot only the region around the keyword.
+              //   2. The clip region is centered so the keyword lands at the target
+              //      position (24% from left, 50% from top — matching the reference).
+              
               const positioning = await page.evaluate(() => {
                 const span = document.querySelector('span[style*="FFFF00"], span[style*="background"]');
                 if (!span) return null;
                 const rect = span.getBoundingClientRect();
-                // Also find the scope tabs rect to know where the top of content is
-                const scopebar = document.querySelector('.b_scopebar');
-                const scopeRect = scopebar ? scopebar.getBoundingClientRect() : { bottom: 0 };
                 return {
-                  keywordX: rect.left,
-                  keywordY: rect.top,
-                  keywordW: rect.width,
-                  keywordH: rect.height,
                   keywordCenterX: rect.left + rect.width / 2,
                   keywordCenterY: rect.top + rect.height / 2,
-                  scopeBottom: scopeRect.bottom,
-                  pageWidth: document.documentElement.scrollWidth,
-                  pageHeight: document.documentElement.scrollHeight,
                 };
               });
               console.log('Keyword position:', JSON.stringify(positioning));
               
               if (positioning) {
-                // We want to zoom in so that the keyword area fills the frame.
-                // Target: keyword at 50% vertical, 24% horizontal (like reference).
-                // 
-                // Strategy: use CSS transform: scale() on the body, with
-                // transform-origin set so the keyword lands at the target position.
+                // We want the keyword at 24% from left, 50% from top in the final image.
+                // The final image is aspectW × aspectH (e.g. 1280×720).
+                // We'll capture a clip region of size (aspectW / zoom) × (aspectH / zoom)
+                // centered so the keyword is at the target position.
                 //
-                // The scale factor: we want ~1.5 results visible (currently ~5).
-                // So scale ≈ 3x. But we also need the scope tabs visible at top.
-                // Let's use scale = 2.5 and adjust origin.
+                // zoom = 2.5 means we capture a region 1/2.5 the size of the viewport,
+                // then the browser scales it up to the full viewport size.
+                const zoom = 2.5;
+                const clipW = aspectW / zoom;  // e.g. 1280/2.5 = 512
+                const clipH = aspectH / zoom;  // e.g. 720/2.5 = 288
                 
-                const scale = 2.5;
-                // The reference has keyword at ~52% vertical, ~24% horizontal.
-                // Our Bing layout has results starting further left, so we need
-                // to shift the keyword further right by using a higher target X.
-                // Since the results column starts at ~13% from left in our layout,
-                // and we want the keyword at 24% in the final image, we need to
-                // account for the fact that zooming in doesn't change the relative
-                // position within the column. So we set targetX higher to push
-                // the keyword toward center.
-                // Actually, the real issue is that the reference has more left margin.
-                // Let's shift the entire view right by targeting the keyword at a
-                // position that accounts for the Bing results column offset.
-                // After zoom 2.5x, the keyword at 11% should move to ~24% if we
-                // increase targetXPercent.
-                // targetX = (keywordCenterX * scale - targetX * viewportW) / (scale - 1)
-                // We want the keyword to appear at 24% in the final image.
-                // But the Bing results column is narrower than the viewport, so
-                // the keyword can't be at 24% unless we pad the left.
-                // Solution: set targetXPercent to 0.24 but also add left padding
-                // to the body to shift everything right.
-                const targetXPercent = 0.24; // keyword at 24% from left (like reference)
-                const targetYPercent = 0.50; // keyword at 50% from top (centered)
+                // We want the keyword at 24% from left in the final image.
+                // In the clip region, that means the keyword should be at
+                // 24% of clipW from the left edge of the clip.
+                const targetXFrac = 0.24;
+                const targetYFrac = 0.50;
                 
-                // After scaling by `scale`, the keyword's screen position will be:
-                //   screenX = (keywordCenterX - originX) * scale + originX
-                // We want screenX = targetXPercent * viewportWidth
-                // So: originX = (keywordCenterX * scale - targetX * viewportW) / (scale - 1)
-                const viewportW = aspectW;
-                const viewportH = aspectH;
-                const originX = (positioning.keywordCenterX * scale - targetXPercent * viewportW) / (scale - 1);
-                const originY = (positioning.keywordCenterY * scale - targetYPercent * viewportH) / (scale - 1);
+                // clip.x = keywordCenterX - targetXFrac * clipW
+                // clip.y = keywordCenterY - targetYFrac * clipH
+                const clipX = positioning.keywordCenterX - targetXFrac * clipW;
+                const clipY = positioning.keywordCenterY - targetYFrac * clipH;
                 
-                console.log('Scale:', scale, 'Origin:', originX, originY);
+                console.log('Clip:', { x: clipX, y: clipY, w: clipW, h: clipH, zoom });
                 
-                await page.evaluate(({ originX, originY, scale }) => {
-                  document.body.style.transform = 'scale(' + scale + ')';
-                  document.body.style.transformOrigin = originX + 'px ' + originY + 'px';
-                  document.body.style.width = (100 / scale) + '%';
-                }, { originX, originY, scale });
-                
+                // Resize the viewport to 3x so the page renders at higher detail
+                // (this makes the zoomed screenshot sharper)
+                await page.setViewportSize({ width: aspectW * 2, height: aspectH * 2 });
                 await page.waitForTimeout(500);
+                
+                // Recalculate keyword position after viewport resize
+                const newPos = await page.evaluate(() => {
+                  const span = document.querySelector('span[style*="FFFF00"], span[style*="background"]');
+                  if (!span) return null;
+                  const rect = span.getBoundingClientRect();
+                  return {
+                    keywordCenterX: rect.left + rect.width / 2,
+                    keywordCenterY: rect.top + rect.height / 2,
+                  };
+                });
+                
+                if (newPos) {
+                  // Scale clip dimensions to the new viewport
+                  const scaleFactor = 2; // viewport is now 2x
+                  const clipX2 = newPos.keywordCenterX - targetXFrac * clipW * scaleFactor;
+                  const clipY2 = newPos.keywordCenterY - targetYFrac * clipH * scaleFactor;
+                  const clipW2 = clipW * scaleFactor;
+                  const clipH2 = clipH * scaleFactor;
+                  
+                  console.log('Adjusted clip:', { x: clipX2, y: clipY2, w: clipW2, h: clipH2 });
+                  
+                  // Take screenshot with clip — this captures only the region
+                  // around the keyword, effectively zooming in
+                  const screenshotBuffer = await page.screenshot({
+                    type: 'png',
+                    clip: {
+                      x: Math.max(0, clipX2),
+                      y: Math.max(0, clipY2),
+                      width: clipW2,
+                      height: clipH2,
+                    },
+                  });
+                  
+                  // The screenshot is at 2x resolution (clipW2 × clipH2 = 1024×576)
+                  // but we want the final size to be aspectW × aspectH (1280×720)
+                  // The screenshot will be automatically resized by the browser
+                  // when displayed, so we just send it as-is.
+                  
+                  const screenshotBase64 = screenshotBuffer.toString('base64');
+                  console.log('Screenshot size:', screenshotBuffer.length, 'bytes');
+                  
+                  await browser.close();
+                  
+                  await fetch(callbackUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      searchId: searchId,
+                      success: true,
+                      query: query,
+                      frameType: frameType,
+                      screenshot: screenshotBase64,
+                      titles: titles
+                    })
+                  });
+                  console.log('Callback sent with screenshot');
+                  return;
+                }
               }
               
-              // Take the screenshot
+              // Fallback: full page screenshot if positioning failed
               const screenshotBuffer = await page.screenshot({ type: 'png' });
               const screenshotBase64 = screenshotBuffer.toString('base64');
               console.log('Screenshot size:', screenshotBuffer.length, 'bytes');
