@@ -96,38 +96,15 @@ jobs:
                 }
               } catch {}
               
-              // For Wikipedia frame: search Bing for keyword Wikipedia, find the
-              // Wikipedia link URL, then navigate directly to it.
+              // For Wikipedia frame: navigate directly to the Wikipedia article.
+              // Wikipedia URLs are predictable: https://en.wikipedia.org/wiki/Keyword_Name
               if (frameType === 'wikipedia') {
-                // Get the Wikipedia URL from the first search result
-                let wikiUrl = null;
-                try {
-                  const href = await page.evaluate(() => {
-                    const link = document.querySelector('#b_results a[href*=\"wikipedia.org/wiki\"]');
-                    return link ? link.href : null;
-                  });
-                  if (href) {
-                    wikiUrl = href;
-                    console.log('Found Wikipedia URL:', wikiUrl);
-                  }
-                } catch {}
-                
-                // If we found a Wikipedia URL, navigate to it directly
-                if (wikiUrl) {
-                  console.log('Navigating to Wikipedia article:', wikiUrl);
-                  await page.goto(wikiUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-                  await page.waitForTimeout(3000);
-                } else {
-                  // Fallback: try clicking the link
-                  try {
-                    const wikiLink = page.locator('a[href*=\"wikipedia.org\"]').first();
-                    if (await wikiLink.isVisible({ timeout: 3000 })) {
-                      await wikiLink.click();
-                      await page.waitForLoadState('domcontentloaded');
-                      await page.waitForTimeout(3000);
-                    }
-                  } catch {}
-                }
+                // Construct the Wikipedia URL from the keyword
+                const wikiTitle = query.trim().replace(/\s+/g, '_');
+                const wikiUrl = 'https://en.wikipedia.org/wiki/' + encodeURIComponent(wikiTitle).replace(/%2F/g, '/');
+                console.log('Navigating directly to Wikipedia:', wikiUrl);
+                await page.goto(wikiUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+                await page.waitForTimeout(3000);
                 
                 // Now we're on the Wikipedia article page.
                 // Highlight the keyword in the H1 heading (the article title).
