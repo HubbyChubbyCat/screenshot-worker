@@ -1,0 +1,305 @@
+name: News Match Cut
+on:
+  repository_dispatch:
+    types: [news-match-cut]
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Playwright
+        run: |
+          npm init -y
+          npm install playwright
+          npx playwright install chromium --with-deps
+
+      - name: Capture News Articles
+        env:
+          KEYWORD: ${{ github.event.client_payload.keyword }}
+          SEARCH_ID: ${{ github.event.client_payload.searchId }}
+          CALLBACK_URL: ${{ secrets.CALLBACK_URL }}
+          COUNT: ${{ github.event.client_payload.count }}
+          ASPECT_W: ${{ github.event.client_payload.aspectW }}
+          ASPECT_H: ${{ github.event.client_payload.aspectH }}
+          HIGHLIGHT_COLOR: ${{ github.event.client_payload.highlightColor }}
+          HIGHLIGHT_TYPE: ${{ github.event.client_payload.highlightType }}
+          FPS: ${{ github.event.client_payload.fps }}
+          FRAMES_PER_IMAGE: ${{ github.event.client_payload.framesPerImage }}
+        run: |
+          node -e "
+          const { chromium } = require('playwright');
+          
+          (async () => {
+            const keyword = process.env.KEYWORD;
+            const searchId = process.env.SEARCH_ID;
+            const callbackBase = process.env.CALLBACK_URL.replace(/\/$/, '');
+            const callbackUrl = callbackBase + '/api/news-match/callback';
+            const maxArticles = parseInt(process.env.COUNT || '10');
+            const aspectW = parseInt(process.env.ASPECT_W || '1280');
+            const aspectH = parseInt(process.env.ASPECT_H || '720');
+            const fps = parseInt(process.env.FPS || '30');
+            const framesPerImage = parseInt(process.env.FRAMES_PER_IMAGE || '8');
+            const highlightColor = process.env.HIGHLIGHT_COLOR || 'yellow';
+            const highlightType = process.env.HIGHLIGHT_TYPE || 'plain';
+            
+            const highlightColors = {
+              yellow: { bg: '#FFFF00', fg: '#000000', underline: '#F44336' },
+              green: { bg: '#4CAF50', fg: '#FFFFFF', underline: '#2E7D32' },
+              blue: { bg: '#2196F3', fg: '#FFFFFF', underline: '#1565C0' },
+              pink: { bg: '#E91E63', fg: '#FFFFFF', underline: '#AD1457' },
+              orange: { bg: '#FF9800', fg: '#000000', underline: '#E65100' },
+              cyan: { bg: '#00BCD4', fg: '#000000', underline: '#00838F' }
+            };
+            const colors = highlightColors[highlightColor] || highlightColors.yellow;
+            const highlightCSS = highlightType === 'underline'
+              ? 'border-bottom: 3px solid ' + colors.underline + '; padding-bottom: 1px;'
+              : 'background: ' + colors.bg + '; color: ' + colors.fg + '; padding: 0 3px; border-radius: 2px; font-weight: 700;';
+            
+            // Approved domains
+            const domains = [
+              'bbc.com', 'theguardian.com', 'aljazeera.com', 'dw.com', 'euronews.com',
+              'elpais.com', 'scmp.com', 'cbsnews.com', 'nbcnews.com', 'npr.org',
+              'cnbc.com', 'foxnews.com', 'abcnews.go.com', 'nypost.com', 'newsweek.com',
+              'time.com', 'news.yahoo.com', 'independent.co.uk', 'mirror.co.uk',
+              'timesofindia.com', 'thehindu.com', 'geo.tv', 'channelnewsasia.com',
+              'straitstimes.com', 'gulfnews.com', 'khaleejtimes.com', 'techcrunch.com',
+              'theverge.com', 'theconversation.com'
+            ];
+            
+            function isApproved(url) {
+              try {
+                const h = new URL(url).hostname;
+                return domains.some(d => h === d || h.endsWith('.' + d));
+              } catch { return false; }
+            }
+            
+            try {
+              const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+              const context = await browser.newContext({
+                viewport: { width: aspectW, height: aspectH },
+                deviceScaleFactor: 2,
+                locale: 'en-US',
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' }
+              });
+              
+              // Step 1: Search Bing for the keyword restricted to approved domains
+              const siteQueries = domains.map(d => 'site:' + d).join(' OR ');
+              const searchQuery = keyword + ' (' + siteQueries + ')';
+              const searchUrl = 'https://www.bing.com/search?q=' + encodeURIComponent(searchQuery) + '&setlang=en&cc=US';
+              console.log('Searching Bing:', searchUrl.substring(0, 200));
+              
+              const searchPage = await context.newPage();
+              await searchPage.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+              await searchPage.waitForTimeout(5000);
+              
+              // Dismiss cookie consent
+              try {
+                const consentBtn = searchPage.locator('#bnp_btn_accept, #acceptBnp, button:has-text(\"Accept\"), button:has-text(\"Agree\")').first();
+                if (await consentBtn.isVisible({ timeout: 2000 })) {
+                  await consentBtn.click();
+                  await searchPage.waitForTimeout(500);
+                }
+              } catch {}
+              
+              // Extract article URLs from Bing results
+              const articleUrls = await searchPage.evaluate(() => {
+                const results = [];
+                const links = document.querySelectorAll('#b_results li.b_algo h2 a, .b_algo h2 a');
+                for (const link of links) {
+                  const href = link.href;
+                  if (href && href.startsWith('http') && !href.includes('bing.com')) {
+                    results.push({
+                      url: href,
+                      title: (link.textContent || '').trim()
+                    });
+                  }
+                }
+                return results;
+              });
+              console.log('Found ' + articleUrls.length + ' articles from Bing');
+              
+              // Filter to approved domains only
+              const approved = articleUrls.filter(a => isApproved(a.url)).slice(0, maxArticles);
+              console.log('Approved articles: ' + approved.length);
+              approved.forEach((a, i) => console.log('  ' + (i+1) + '. ' + a.title.substring(0, 60) + ' - ' + a.url.substring(0, 80)));
+              
+              await searchPage.close();
+              
+              // Step 2: Visit each article and capture a screenshot
+              const screenshots = [];
+              for (let i = 0; i < approved.length; i++) {
+                const article = approved[i];
+                console.log('Capturing ' + (i+1) + '/' + approved.length + ': ' + article.url.substring(0, 80));
+                
+                const page = await context.newPage();
+                try {
+                  await page.goto(article.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+                  await page.waitForTimeout(3000);
+                  
+                  // Try to dismiss cookie consent on the article page
+                  try {
+                    const btns = page.locator('button:has-text(\"Accept\"), button:has-text(\"Agree\"), button:has-text(\"I accept\"), button:has-text(\"OK\"), button:has-text(\"Got it\")');
+                    if (await btns.first().isVisible({ timeout: 1500 })) {
+                      await btns.first().click();
+                      await page.waitForTimeout(500);
+                    }
+                  } catch {}
+                  
+                  // Highlight the keyword in the page
+                  const highlightResult = await page.evaluate((kw, css) => {
+                    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+                      acceptNode(node) {
+                        const parent = node.parentElement;
+                        if (!parent) return NodeFilter.FILTER_REJECT;
+                        const tag = parent.tagName;
+                        if (tag === 'SCRIPT' || tag === 'STYLE') return NodeFilter.FILTER_REJECT;
+                        const text = node.textContent || '';
+                        if (text.toLowerCase().includes(kw.toLowerCase()) && text.trim().length > 10) {
+                          return NodeFilter.FILTER_ACCEPT;
+                        }
+                        return NodeFilter.FILTER_REJECT;
+                      }
+                    });
+                    
+                    const nodes = [];
+                    let n;
+                    while ((n = walker.nextNode())) nodes.push(n);
+                    
+                    let highlighted = 0;
+                    for (const textNode of nodes) {
+                      const text = textNode.textContent;
+                      const lower = text.toLowerCase();
+                      const klower = kw.toLowerCase();
+                      let idx = lower.indexOf(klower);
+                      
+                      while (idx !== -1 && highlighted < 3) {
+                        const before = text.substring(0, idx);
+                        const match = text.substring(idx, idx + kw.length);
+                        const after = text.substring(idx + kw.length);
+                        
+                        const span = document.createElement('span');
+                        span.setAttribute('style', css);
+                        span.textContent = match;
+                        
+                        const frag = document.createDocumentFragment();
+                        frag.appendChild(document.createTextNode(before));
+                        frag.appendChild(span);
+                        frag.appendChild(document.createTextNode(after));
+                        
+                        textNode.parentNode.replaceChild(frag, textNode);
+                        highlighted++;
+                        break; // move to next text node
+                      }
+                    }
+                    
+                    // Find the first highlighted span position
+                    const span = document.querySelector('span[style*=FFFF00], span[style*=background]');
+                    if (!span) return null;
+                    const rect = span.getBoundingClientRect();
+                    if (rect.width === 0 || rect.height === 0) return null;
+                    
+                    return {
+                      kx: rect.left + rect.width / 2,
+                      ky: rect.top + rect.height / 2,
+                      kw: rect.width,
+                      kh: rect.height
+                    };
+                  }, keyword, highlightCSS);
+                  
+                  if (!highlightResult) {
+                    console.log('  Keyword not found on page, skipping');
+                    await page.close();
+                    continue;
+                  }
+                  
+                  // Scroll the keyword into view
+                  await page.evaluate(() => {
+                    const span = document.querySelector('span[style*=FFFF00], span[style*=background]');
+                    if (span) span.scrollIntoView({ block: 'center' });
+                  });
+                  await page.waitForTimeout(500);
+                  
+                  // Re-read position after scroll
+                  const finalPos = await page.evaluate(() => {
+                    const span = document.querySelector('span[style*=FFFF00], span[style*=background]');
+                    if (!span) return null;
+                    const rect = span.getBoundingClientRect();
+                    return {
+                      kx: rect.left + rect.width / 2,
+                      ky: rect.top + rect.height / 2,
+                      kw: rect.width,
+                      kh: rect.height
+                    };
+                  });
+                  
+                  if (!finalPos) {
+                    console.log('  Keyword position lost after scroll, skipping');
+                    await page.close();
+                    continue;
+                  }
+                  
+                  // Take full viewport screenshot
+                  const screenshotBuffer = await page.screenshot({ type: 'png' });
+                  const screenshotBase64 = screenshotBuffer.toString('base64');
+                  
+                  screenshots.push({
+                    url: article.url,
+                    title: article.title,
+                    screenshot: screenshotBase64,
+                    keywordX: finalPos.kx,
+                    keywordY: finalPos.ky,
+                    keywordW: finalPos.kw,
+                    keywordH: finalPos.kh,
+                    deviceScaleFactor: 2
+                  });
+                  
+                  console.log('  Captured successfully (keyword at ' + Math.round(finalPos.kx) + ',' + Math.round(finalPos.ky) + ')');
+                } catch (err) {
+                  console.log('  Failed: ' + err.message);
+                } finally {
+                  await page.close();
+                }
+              }
+              
+              await browser.close();
+              
+              console.log('Total screenshots captured: ' + screenshots.length);
+              
+              // Send results back to server
+              await fetch(callbackUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  searchId: searchId,
+                  success: true,
+                  keyword: keyword,
+                  screenshots: screenshots,
+                  fps: fps,
+                  framesPerImage: framesPerImage,
+                  aspectW: aspectW,
+                  aspectH: aspectH
+                })
+              });
+              console.log('Callback sent with ' + screenshots.length + ' screenshots');
+              
+            } catch (err) {
+              console.error('Capture failed:', err.message);
+              await fetch(callbackUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  searchId: searchId,
+                  success: false,
+                  error: err.message
+                })
+              }).catch(() => {});
+            }
+          })();
+          "
