@@ -234,54 +234,68 @@ jobs:
 
                 await page.waitForTimeout(2000);
 
-                // Now try to find the keyword in the PAA area.
-                // Since PAA text is not in the DOM, we will try to highlight
-                // by injecting a CSS rule that uses background-color on
-                // elements containing the keyword text.
-                // Actually, let try a different approach: use the CSS
-                // ::target-text or find elements by visual position.
-                
-                // For now, just find the keyword in the visible search results
-                // (which ARE in the DOM) and use that position. The server
-                // will crop around it.
+                // Find the PAA section position. The PAA section is between
+                // the result count and the first organic result. We find both
+                // positions and use the midpoint as the crop center.
+                // The keyword "Elon Musk" appears naturally in the PAA questions.
                 const paaPositioning = await page.evaluate((keyword) => {
-                  // Find the first occurrence of the keyword in the results
+                  // Find the result count element (About X results)
                   const allElements = document.querySelectorAll('#b_results *');
+                  let resultsCountRect = null;
+                  let firstResultRect = null;
+
                   for (const el of allElements) {
                     if (el.children.length === 0) {
                       const text = (el.textContent || '').trim();
-                      if (text.toLowerCase().includes(keyword.toLowerCase()) && text.length < 200) {
-                        // Check if this element is in the PAA area (near the top of results)
-                        const rect = el.getBoundingClientRect();
-                        // The PAA section is typically in the top 400px of the results
-                        if (rect.top > 50 && rect.top < 500) {
-                          // Highlight this element
-                          const lower = text.toLowerCase();
-                          const klower = keyword.toLowerCase();
-                          const idx = lower.indexOf(klower);
-                          if (idx !== -1) {
-                            const before = text.substring(0, idx);
-                            const match = text.substring(idx, idx + keyword.length);
-                            const after = text.substring(idx + keyword.length);
-                            el.innerHTML = '';
-                            el.appendChild(document.createTextNode(before));
-                            const span = document.createElement('span');
-                            span.setAttribute('style', 'background: #FFFF00; color: #000000; padding: 0 2px; font-weight: 600;');
-                            span.textContent = match;
-                            el.appendChild(span);
-                            el.appendChild(document.createTextNode(after));
-
-                            return {
-                              kx: rect.left + rect.width / 2,
-                              ky: rect.top + rect.height / 2,
-                              kw: rect.width,
-                              kh: rect.height,
-                            };
+                      // Find result count
+                      if (!resultsCountRect && text.match(/about\s+[\d,]+\s+(results|sites)/i)) {
+                        resultsCountRect = el.getBoundingClientRect();
+                      }
+                      // Find first result title (h2 inside li.b_algo)
+                      if (!firstResultRect && el.tagName === 'A') {
+                        const h2 = el.closest('h2');
+                        if (h2) {
+                          const li = h2.closest('li.b_algo, .b_algo');
+                          if (li) {
+                            firstResultRect = h2.getBoundingClientRect();
                           }
                         }
                       }
                     }
                   }
+
+                  // If we found both, the PAA section is between them
+                  if (resultsCountRect && firstResultRect) {
+                    // PAA section center is between the result count bottom
+                    // and the first result top
+                    const paaTop = resultsCountRect.bottom;
+                    const paaBottom = firstResultRect.top;
+                    const paaCenterY = (paaTop + paaBottom) / 2;
+
+                    // For X, use the center of the results column
+                    // (approx 30% from left of viewport)
+                    const paaCenterX = window.innerWidth * 0.30;
+
+                    return {
+                      kx: paaCenterX,
+                      ky: paaCenterY,
+                      kw: 200,
+                      kh: 40,
+                      paaTop: paaTop,
+                      paaBottom: paaBottom,
+                    };
+                  }
+
+                  // Fallback: if no PAA found, use the result count position
+                  if (resultsCountRect) {
+                    return {
+                      kx: window.innerWidth * 0.30,
+                      ky: resultsCountRect.bottom + 100,
+                      kw: 200,
+                      kh: 40,
+                    };
+                  }
+
                   return null;
                 }, query);
                 console.log('PAA keyword position:', JSON.stringify(paaPositioning));
